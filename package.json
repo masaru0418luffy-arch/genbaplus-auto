@@ -1,0 +1,45 @@
+{
+  "name": "genbaplus-auto-poster",
+  "version": "1.0.0",
+  "description": "現場Plus 自動投稿アプリ",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win",
+    "build:all": "electron-builder --mac --win"
+  },
+  "dependencies": {
+    "electron-store": "^8.2.0",
+    "node-cron": "^3.0.3"
+  },
+  "devDependencies": {
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "jp.sodesign.genbaplus-auto",
+    "productName": "現場Plus自動投稿",
+    "copyright": "Copyright © 2024 sodesign",
+    "files": [
+      "src/**/*",
+      "renderer/**/*",
+      "assets/**/*"
+    ],
+    "mac": {
+      "target": "dmg",
+      "icon": "assets/icon.icns",
+      "category": "public.app-category.business"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerLanguages": ["ja"],
+      "language": "1041"
+    }
+  }
+}

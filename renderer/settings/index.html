@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>設定</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+    background: #f5f5f5;
+    color: #333;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .header {
+    background: #37474f;
+    color: white;
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .header h1 { font-size: 15px; font-weight: 600; }
+
+  .content { flex: 1; overflow-y: scroll; padding: 20px; display: flex; flex-direction: column; gap: 20px; -webkit-overflow-scrolling: touch; }
+
+  .section {
+    background: white;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid #e0e0e0;
+  }
+  .section-title {
+    padding: 10px 16px;
+    font-size: 12px;
+    font-weight: 700;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: #fafafa;
+    border-bottom: 1px solid #e0e0e0;
+  }
+
+  .field {
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid #f0f0f0;
+  }
+  .field:last-child { border-bottom: none; }
+
+  .field label {
+    flex: 0 0 130px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #444;
+  }
+
+  .field input {
+    flex: 1;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-size: 13px;
+    color: #333;
+    background: white;
+  }
+  .field input:focus { outline: none; border-color: #37474f; }
+
+  .footer {
+    padding: 16px 20px;
+    background: white;
+    border-top: 1px solid #e0e0e0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .save-msg { font-size: 13px; color: #2e7d32; display: none; }
+  .save-msg.visible { display: block; }
+
+  button {
+    padding: 9px 24px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    border: none;
+    cursor: pointer;
+  }
+  .btn-save { background: #37474f; color: white; }
+  .btn-save:hover { background: #263238; }
+
+  .hint {
+    font-size: 11px;
+    color: #999;
+    padding: 8px 16px 12px;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>⚙️ 設定</h1>
+</div>
+
+<div class="content">
+
+  <div class="section">
+    <div class="section-title">現場Plus ログイン情報</div>
+    <div class="field">
+      <label>サーバーURL</label>
+      <input type="text" id="url" placeholder="https://apg.kensetsu-cloud.jp">
+    </div>
+    <div class="field">
+      <label>テナントID</label>
+      <input type="text" id="tenantId" placeholder="例：X572D51">
+    </div>
+    <div class="field">
+      <label>ログインID</label>
+      <input type="text" id="loginId" placeholder="例：staff01@example.com">
+    </div>
+    <div class="field">
+      <label>パスワード</label>
+      <input type="password" id="password" placeholder="パスワード">
+    </div>
+    <div class="hint">
+      ※ ログイン情報はこのPCのみに保存され、外部へ送信されることはありません。
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">スケジュール設定</div>
+    <div class="field">
+      <label>週次 基準日</label>
+      <input type="date" id="weeklyBaseDate" value="2026-07-03">
+    </div>
+    <div class="hint">
+      週次投稿は「基準日から4週間ごとの金曜日」に実行されます。<br>
+      月次投稿は「毎月最終金曜日」に自動で実行されます。<br>
+      いずれも毎週金曜14:50に確認ウィンドウが表示されます。
+    </div>
+  </div>
+
+</div>
+
+<div class="footer">
+  <span class="save-msg" id="save-msg">✅ 保存しました</span>
+  <button class="btn-save" id="btn-save">保存</button>
+</div>
+
+<script>
+  const api = window.electronAPI;
+
+  // 設定を読み込んでフォームに反映
+  api.getSettings().then(settings => {
+    if (!settings) return;
+    document.getElementById('url').value        = settings.url        || '';
+    document.getElementById('tenantId').value   = settings.tenantId   || '';
+    document.getElementById('loginId').value    = settings.loginId    || '';
+    document.getElementById('password').value   = settings.password   || '';
+  });
+
+  // 保存ボタン
+  document.getElementById('btn-save').addEventListener('click', () => {
+    const settings = {
+      url:      document.getElementById('url').value.trim(),
+      tenantId: document.getElementById('tenantId').value.trim(),
+      loginId:  document.getElementById('loginId').value.trim(),
+      password: document.getElementById('password').value
+    };
+    api.saveSettings(settings);
+  });
+
+  // 保存完了
+  api.onSettingsSaved(() => {
+    const msg = document.getElementById('save-msg');
+    msg.classList.add('visible');
+    setTimeout(() => msg.classList.remove('visible'), 3000);
+  });
+</script>
+</body>
+</html>
