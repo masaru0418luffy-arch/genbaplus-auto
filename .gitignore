@@ -11,7 +11,9 @@ __pycache__/
 *.pyc
 .venv/
 
-# gmaps-scraper 出力・ログ（データは Git 管理外）
+# gmaps-scraper 出力・ログ・機密ファイル（Git 管理外）
 gmaps-scraper/output/
 gmaps-scraper/logs/
 gmaps-scraper/progress.json
+gmaps-scraper/credentials.json
+gmaps-scraper/_tmp_config.yaml

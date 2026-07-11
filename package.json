@@ -7,7 +7,8 @@
     "start": "electron .",
     "build:mac": "electron-builder --mac",
     "build:win": "electron-builder --win",
-    "build:all": "electron-builder --mac --win"
+    "build:all": "electron-builder --mac --win",
+    "release": "npm run build:mac && gh release delete v1.0.0 --yes; gh release create v1.0.0 dist/genbaplus-auto-arm64.dmg --title 'v1.0.0' --notes '最新版'"
   },
   "dependencies": {
     "electron-store": "^8.2.0",
@@ -26,14 +27,32 @@
       "renderer/**/*",
       "assets/**/*"
     ],
+    "extraResources": [
+      {
+        "from": "gmaps-scraper",
+        "to": "gmaps-scraper",
+        "filter": [
+          "**/*",
+          "!.venv/**",
+          "!output/**",
+          "!logs/**",
+          "!__pycache__/**",
+          "!*.pyc",
+          "!progress.json",
+          "!_tmp_config.yaml"
+        ]
+      }
+    ],
     "mac": {
       "target": "dmg",
       "icon": "assets/icon.icns",
-      "category": "public.app-category.business"
+      "category": "public.app-category.business",
+      "artifactName": "genbaplus-auto-arm64.dmg"
     },
     "win": {
       "target": "nsis",
-      "icon": "assets/icon.ico"
+      "icon": "assets/icon.ico",
+      "artifactName": "genbaplus-auto-setup.exe"
     },
     "nsis": {
       "oneClick": false,

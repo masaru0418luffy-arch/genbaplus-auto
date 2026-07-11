@@ -6,13 +6,14 @@ const cron = require('node-cron');
 const Store = require('electron-store');
 const { generateWeeklyMessage, generateMonthlyMessage } = require('./templates');
 const { postToGenbaPlus } = require('./automation');
-
-// スクレイパーのルートディレクトリ
-const SCRAPER_DIR = path.join(__dirname, '..', 'gmaps-scraper');
+const scraperSetup = require('./scraper-setup');
 
 // scraper ウィンドウ管理
 let scraperWindow = null;
 let scraperProcess = null;
+
+// 後方互換用（開発中は旧パスを使う）
+const SCRAPER_DIR = scraperSetup.CODE_DIR;
 
 // 設定の永続化
 const store = new Store({
@@ -313,6 +314,27 @@ function openScraperWindow() {
 // Scraper IPC ハンドラ
 // -------------------------------------------------------
 
+const send = (channel, msg) => {
+  if (scraperWindow && !scraperWindow.isDestroyed()) {
+    scraperWindow.webContents.send(channel, msg);
+  }
+};
+
+// 初回セットアップ確認
+ipcMain.handle('scraper-check-setup', () => scraperSetup.isReady());
+
+// 初回セットアップ実行
+ipcMain.on('scraper-run-setup', async () => {
+  try {
+    await scraperSetup.setup((step, pct) => {
+      send('scraper-setup-progress', { step, pct });
+    });
+    send('scraper-setup-done', null);
+  } catch (err) {
+    send('scraper-setup-error', err.message);
+  }
+});
+
 // Python scraper 起動
 ipcMain.on('scraper-start', (event, params) => {
   if (scraperProcess) {
@@ -320,66 +342,50 @@ ipcMain.on('scraper-start', (event, params) => {
     scraperProcess = null;
   }
 
-  // scraper.py に渡す一時設定ファイルを作成
-  const tmpConfig = buildTempConfig(params);
-  const tmpConfigPath = path.join(SCRAPER_DIR, '_tmp_config.yaml');
-  fs.writeFileSync(tmpConfigPath, tmpConfig, 'utf-8');
+  const { python, script, userDir, envPath } = scraperSetup.getRunParams();
 
-  // Python 実行ファイルを探す（venv 優先）
-  const pythonCandidates = [
-    path.join(SCRAPER_DIR, '.venv', 'bin', 'python3'),
-    path.join(SCRAPER_DIR, '.venv', 'Scripts', 'python.exe'),
-    'python3',
-    'python',
-  ];
-  const pythonPath = pythonCandidates.find(p => {
-    try { return fs.existsSync(p); } catch { return false; }
-  }) || 'python3';
+  // 一時 config を userDir に書き出す
+  const tmpConfigPath = path.join(userDir, '_tmp_config.yaml');
+  fs.writeFileSync(tmpConfigPath, buildTempConfig(params, userDir), 'utf-8');
 
-  scraperProcess = spawn(pythonPath, ['scraper.py', '--config', '_tmp_config.yaml'], {
-    cwd: SCRAPER_DIR,
-    env: { ...process.env },
-  });
-
-  const send = (channel, msg) => {
-    if (scraperWindow && !scraperWindow.isDestroyed()) {
-      scraperWindow.webContents.send(channel, msg);
-    }
+  // .env と credentials.json を userDir から読むよう環境変数を設定
+  const env = {
+    ...process.env,
+    DOTENV_PATH: envPath,
   };
 
+  scraperProcess = spawn(python, [script, '--config', tmpConfigPath], {
+    cwd: scraperSetup.CODE_DIR,
+    env,
+  });
+
   let outputBuffer = '';
-  let lastRows = [];
 
   scraperProcess.stdout.on('data', (data) => {
     const lines = (outputBuffer + data.toString()).split('\n');
     outputBuffer = lines.pop();
-    lines.forEach(line => {
-      if (line.trim()) send('scraper-log', line.trim());
-    });
+    lines.forEach(line => { if (line.trim()) send('scraper-log', line.trim()); });
   });
 
   scraperProcess.stderr.on('data', (data) => {
-    const lines = data.toString().split('\n').filter(l => l.trim());
-    lines.forEach(line => send('scraper-log', '⚠️ ' + line));
+    data.toString().split('\n').filter(l => l.trim())
+      .forEach(line => send('scraper-log', '⚠️ ' + line));
   });
 
-  scraperProcess.on('close', (code) => {
+  scraperProcess.on('close', () => {
     scraperProcess = null;
     try { fs.unlinkSync(tmpConfigPath); } catch {}
-
-    // CSV を読み込んでサマリーと一緒に送る
-    const csvPath = path.join(SCRAPER_DIR, 'output', 'results.csv');
+    const csvPath = path.join(userDir, 'output', 'results.csv');
     const rows = readCSV(csvPath);
-    const summary = readSummaryFromLog();
-    summary.rows = rows.slice(-100);  // 最新100件
+    const summary = readSummaryFromLog(userDir);
+    summary.rows = rows.slice(-100);
     summary.csvContent = fs.existsSync(csvPath) ? fs.readFileSync(csvPath, 'utf-8') : '';
-
     send('scraper-done', summary);
   });
 
   scraperProcess.on('error', (err) => {
     scraperProcess = null;
-    send('scraper-error', `Python 起動エラー: ${err.message}\n.venv がセットアップされているか確認してください。`);
+    send('scraper-error', `Python 起動エラー: ${err.message}`);
   });
 });
 
@@ -390,14 +396,18 @@ ipcMain.on('scraper-stop', () => {
 
 // 進捗リセット
 ipcMain.on('scraper-reset-progress', () => {
-  const p = path.join(SCRAPER_DIR, 'progress.json');
+  const { userDir } = scraperSetup.getRunParams();
+  const p = path.join(userDir, 'progress.json');
   const init = { version: 1, searches: [], completed_urls: [], last_run_at: null, interrupted: false, interrupt_reason: null };
+  fs.mkdirSync(userDir, { recursive: true });
   fs.writeFileSync(p, JSON.stringify(init, null, 2), 'utf-8');
 });
 
 // Supabase 設定の保存・読み込み
 ipcMain.on('scraper-save-settings', (event, settings) => {
-  const envPath = path.join(SCRAPER_DIR, '.env');
+  const { userDir } = scraperSetup.getRunParams();
+  fs.mkdirSync(userDir, { recursive: true });
+  const envPath = path.join(userDir, '.env');
   const content = [
     `SUPABASE_URL=${settings.supabaseUrl || ''}`,
     `SUPABASE_ANON_KEY=${settings.supabaseKey || ''}`,
@@ -405,21 +415,19 @@ ipcMain.on('scraper-save-settings', (event, settings) => {
   fs.writeFileSync(envPath, content, 'utf-8');
 });
 
-ipcMain.on('scraper-get-settings', (event) => {
-  const envPath = path.join(SCRAPER_DIR, '.env');
+ipcMain.on('scraper-get-settings', () => {
+  const { userDir } = scraperSetup.getRunParams();
+  const envPath = path.join(userDir, '.env');
   const settings = { supabaseUrl: '', supabaseKey: '' };
   if (fs.existsSync(envPath)) {
-    const lines = fs.readFileSync(envPath, 'utf-8').split('\n');
-    lines.forEach(line => {
+    fs.readFileSync(envPath, 'utf-8').split('\n').forEach(line => {
       const [k, ...rest] = line.split('=');
       const v = rest.join('=').trim();
       if (k === 'SUPABASE_URL') settings.supabaseUrl = v;
       if (k === 'SUPABASE_ANON_KEY') settings.supabaseKey = v;
     });
   }
-  if (scraperWindow && !scraperWindow.isDestroyed()) {
-    scraperWindow.webContents.send('scraper-settings', settings);
-  }
+  send('scraper-settings', settings);
 });
 
 // CSV ダウンロード（保存ダイアログ）
@@ -433,7 +441,8 @@ ipcMain.on('scraper-download-csv', async (event, content) => {
 });
 
 ipcMain.on('scraper-open-csv-folder', () => {
-  shell.openPath(path.join(SCRAPER_DIR, 'output'));
+  const { userDir } = scraperSetup.getRunParams();
+  shell.openPath(path.join(userDir, 'output'));
 });
 
 // -------------------------------------------------------
@@ -445,11 +454,14 @@ function yamlStr(s) {
   return "'" + String(s).replace(/'/g, "''") + "'";
 }
 
-// 一時 config.yaml を生成（YAML 特殊文字に対応）
-function buildTempConfig(params) {
+// 一時 config.yaml を生成（YAML 特殊文字に対応、userDir の絶対パスで出力先を指定）
+function buildTempConfig(params, userDir) {
+  const ud = userDir || scraperSetup.USER_DIR;
   const kw = params.keywords.map(k => `  - ${yamlStr(k)}`).join('\n');
   const ar = params.areas.map(a => `  - ${yamlStr(a)}`).join('\n');
   return [
+    'sheets:',
+    `  spreadsheet_id: '1gd4-WX_57Ctb2jLO9v3fuGFCqUi6c_zN1wWv3z1vGcU'`,
     'search:',
     `  keywords:\n${kw}`,
     `  areas:\n${ar}`,
@@ -464,9 +476,9 @@ function buildTempConfig(params) {
     '  cooldown_min_seconds: 60',
     '  cooldown_max_seconds: 120',
     'output:',
-    '  csv_file: output/results.csv',
-    '  progress_file: progress.json',
-    '  log_file: logs/scraper.log',
+    `  csv_file: ${yamlStr(path.join(ud, 'output', 'results.csv'))}`,
+    `  progress_file: ${yamlStr(path.join(ud, 'progress.json'))}`,
+    `  log_file: ${yamlStr(path.join(ud, 'logs', 'scraper.log'))}`,
     '  log_level: INFO',
   ].join('\n');
 }
@@ -507,11 +519,12 @@ function parseCSVRFC(text) {
   return rows;
 }
 
-function readSummaryFromLog() {
-  const logPath = path.join(SCRAPER_DIR, 'logs', 'scraper.log');
+function readSummaryFromLog(userDir) {
+  const ud = userDir || scraperSetup.USER_DIR;
+  const logPath = path.join(ud, 'logs', 'scraper.log');
   const summary = { new_count: 0, total_count: 0, filtered_count: 0, error_count: 0, captcha_interrupted: false };
   try {
-    summary.total_count = readCSV(path.join(SCRAPER_DIR, 'output', 'results.csv')).length;
+    summary.total_count = readCSV(path.join(ud, 'output', 'results.csv')).length;
     if (fs.existsSync(logPath)) {
       const log = fs.readFileSync(logPath, 'utf-8');
       const last = (pattern) => {

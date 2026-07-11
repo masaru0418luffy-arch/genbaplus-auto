@@ -198,13 +198,35 @@
     }
     .settings-form input { background: white; }
     .save-ok { color: #059669; font-size: 13px; display: none; }
+
+    /* セットアップ画面 */
+    #setupScreen {
+      position: fixed; inset: 0; background: #f5f7fa;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 24px;
+      z-index: 999;
+    }
+    #setupScreen h2 { font-size: 20px; font-weight: 700; color: #1a1a2e; }
+    #setupStep { font-size: 14px; color: #6b7280; min-height: 20px; }
+    .setup-bar-wrap { width: 360px; background: #e5e7eb; border-radius: 6px; height: 8px; }
+    .setup-bar { background: #2563eb; height: 8px; border-radius: 6px; width: 0; transition: width .4s; }
+    #setupError { color: #dc2626; font-size: 13px; max-width: 400px; text-align: center; display: none; }
   </style>
 </head>
 <body>
 
+<!-- 初回セットアップ画面（isReady() が false のとき表示） -->
+<div id="setupScreen" style="display:none">
+  <div style="font-size:48px">⚙️</div>
+  <h2>初回セットアップ</h2>
+  <p id="setupStep" style="color:#6b7280">確認中...</p>
+  <div class="setup-bar-wrap"><div class="setup-bar" id="setupBar"></div></div>
+  <p id="setupError"></p>
+</div>
+
 <header>🗺️ Google マップ 営業リスト抽出</header>
 
-<div class="container">
+<div class="container" id="mainContainer">
   <!-- サイドバー -->
   <aside class="sidebar">
     <div>
@@ -500,10 +522,40 @@ function saveSupabaseSettings() {
 }
 
 // ──────────────────────────────────────────────────
+// 初回セットアップ
+// ──────────────────────────────────────────────────
+window.electronAPI.onSetupProgress(({ step, pct }) => {
+  document.getElementById('setupStep').textContent = step;
+  document.getElementById('setupBar').style.width = pct + '%';
+});
+
+window.electronAPI.onSetupDone(() => {
+  document.getElementById('setupScreen').style.display = 'none';
+  document.getElementById('mainContainer').style.display = '';
+  window.electronAPI.getScraperSettings();
+});
+
+window.electronAPI.onSetupError((msg) => {
+  const el = document.getElementById('setupError');
+  el.style.display = 'block';
+  el.textContent = '❌ セットアップ失敗: ' + msg;
+  document.getElementById('setupStep').textContent = '';
+});
+
+// ──────────────────────────────────────────────────
 // 初期化
 // ──────────────────────────────────────────────────
-window.addEventListener('DOMContentLoaded', () => {
-  window.electronAPI.getScraperSettings();
+window.addEventListener('DOMContentLoaded', async () => {
+  const ready = await window.electronAPI.checkSetup();
+  if (ready) {
+    document.getElementById('setupScreen').style.display = 'none';
+    document.getElementById('mainContainer').style.display = '';
+    window.electronAPI.getScraperSettings();
+  } else {
+    document.getElementById('setupScreen').style.display = 'flex';
+    document.getElementById('mainContainer').style.display = 'none';
+    window.electronAPI.runSetup();
+  }
 });
 </script>
 </body>

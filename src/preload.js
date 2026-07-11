@@ -27,4 +27,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onScraperSettings:    (cb)      => ipcRenderer.on('scraper-settings', (_, s)   => cb(s)),
   downloadCSV:          (content) => ipcRenderer.send('scraper-download-csv', content),
   openCSVFolder:        ()        => ipcRenderer.send('scraper-open-csv-folder'),
+  // 初回セットアップ
+  checkSetup:           ()        => ipcRenderer.invoke('scraper-check-setup'),
+  runSetup:             ()        => ipcRenderer.send('scraper-run-setup'),
+  onSetupProgress:      (cb)      => ipcRenderer.on('scraper-setup-progress', (_, d) => cb(d)),
+  onSetupDone:          (cb)      => ipcRenderer.on('scraper-setup-done',     ()     => cb()),
+  onSetupError:         (cb)      => ipcRenderer.on('scraper-setup-error',    (_, m) => cb(m)),
 });
