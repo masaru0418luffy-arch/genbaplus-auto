@@ -65,6 +65,13 @@ selectors:
     - 'h1[class*="fontHeadlineLarge"]'
     - 'h1'
 
+  # 住所
+  address_list:
+    - 'button[data-item-id="address"]'
+    - 'div[data-item-id="address"]'
+    - '[aria-label*="住所"]'
+    - 'button[aria-label*="番地"]'
+
   # 口コミ件数
   review_count_list:
     - 'button[aria-label*="件の口コミ"]'

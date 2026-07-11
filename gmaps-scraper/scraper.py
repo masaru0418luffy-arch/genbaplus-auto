@@ -62,6 +62,7 @@ def setup_logging(log_file: str, level: str = "INFO") -> logging.Logger:
 class StoreData:
     company_name: str = ""
     industry: str = ""
+    address: str = ""
     instagram_url: str = ""
     website_url: str = ""
     review_count: int = 0
@@ -521,6 +522,9 @@ class GoogleMapsScraper:
             # 店舗名
             store.company_name = await self._try_selectors("store_name_list")
 
+            # 住所
+            store.address = await self._get_address()
+
             # 口コミ件数
             store.review_count = await self._get_review_count()
 
@@ -540,6 +544,50 @@ class GoogleMapsScraper:
             return None
 
         return store
+
+    async def _get_address(self) -> str:
+        """店舗の住所を取得する。"""
+        sels = self.selectors.get("address_list", [
+            'button[data-item-id="address"]',
+            'div[data-item-id="address"]',
+            '[aria-label*="住所"]',
+            'button[aria-label*="番地"]',
+        ])
+        if isinstance(sels, str):
+            sels = [sels]
+        for sel in sels:
+            try:
+                el = await self.page.query_selector(sel)
+                if el:
+                    text = (
+                        await el.get_attribute("aria-label")
+                        or await el.text_content()
+                        or ""
+                    ).strip()
+                    # "住所:" や "住所: " のプレフィックスを除去
+                    text = re.sub(r"^住所[:：]\s*", "", text).strip()
+                    if text:
+                        return text
+            except Exception:
+                continue
+
+        # フォールバック: ページ内の住所パターン（日本の郵便番号 or 都道府県で始まる行）
+        try:
+            content = await self.page.content()
+            m = re.search(
+                r"〒?\d{3}-?\d{4}[^<\"]{1,60}|"
+                r"(?:北海道|青森|岩手|宮城|秋田|山形|福島|茨城|栃木|群馬|埼玉|千葉|東京|神奈川"
+                r"|新潟|富山|石川|福井|山梨|長野|岐阜|静岡|愛知|三重|滋賀|京都|大阪|兵庫|奈良|和歌山"
+                r"|鳥取|島根|岡山|広島|山口|徳島|香川|愛媛|高知|福岡|佐賀|長崎|熊本|大分|宮崎|鹿児島|沖縄)"
+                r"[^<\"]{1,60}",
+                content,
+            )
+            if m:
+                return m.group(0).strip()
+        except Exception:
+            pass
+
+        return ""
 
     async def _get_review_count(self) -> int:
         # aria-label 属性から数字を抽出

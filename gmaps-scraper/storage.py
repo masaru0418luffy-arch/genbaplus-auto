@@ -67,7 +67,7 @@ class ProgressStore(ABC):
 # CSV バックエンド（ローカル保存）
 # ---------------------------------------------------------------------------
 FIELDNAMES = [
-    "company_name", "industry", "instagram_url", "website_url",
+    "company_name", "industry", "address", "instagram_url", "website_url",
     "review_count", "last_photo_posted_date", "website_domain_creation_date",
     "google_maps_url", "scraped_at",
 ]
