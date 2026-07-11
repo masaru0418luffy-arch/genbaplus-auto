@@ -70,6 +70,8 @@ selectors:
   store_name_list:
     - 'h1.DUwDvf'
     - 'h1[class*="fontHeadlineLarge"]'
+    - 'h1[class*="DUwDvf"]'
+    - 'div[class*="fontHeadlineLarge"]'
     - 'h1'
 
   # 住所（複数セレクタ + JSON-LD フォールバックで取得率向上）

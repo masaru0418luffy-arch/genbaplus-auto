@@ -532,8 +532,16 @@ class GoogleMapsScraper:
                 self._captcha_detected = True
                 return None
 
-            # 店舗名
+            # 店舗名（複数セレクタ + ページタイトルフォールバック）
             store.company_name = await self._try_selectors("store_name_list")
+            if not store.company_name:
+                # ページタイトルから取得（「店舗名 - Google マップ」形式）
+                try:
+                    title = await self.page.title()
+                    if title and " - Google" in title:
+                        store.company_name = title.split(" - Google")[0].strip()
+                except Exception:
+                    pass
 
             # 住所
             store.address = await self._get_address()
@@ -1120,15 +1128,17 @@ def main() -> int:
     progress_manager = create_progress_store(config)
     csv_writer = create_store_writer(config)
 
+    initial_count = csv_writer.count_rows()
     start = datetime.now()
     try:
         summary = asyncio.run(run_scraper(config, progress_manager, csv_writer, logger))
     except KeyboardInterrupt:
         logger.warning("Ctrl+C により中断")
         progress_manager.set_interrupted("ユーザーによる中断 (Ctrl+C)")
+        total = csv_writer.count_rows()
         summary = {
-            "new_count": 0,
-            "total_count": csv_writer.count_rows(),
+            "new_count": total - initial_count,   # 今回の実行で保存できた件数
+            "total_count": total,
             "skipped_count": 0,
             "filtered_count": 0,
             "error_count": 0,
