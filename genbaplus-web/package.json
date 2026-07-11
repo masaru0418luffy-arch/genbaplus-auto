@@ -1,0 +1,15 @@
+{
+  "name": "genbaplus-web",
+  "version": "1.0.0",
+  "description": "現場Plus 自動投稿 Webアプリ",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "node-cron": "^3.0.3",
+    "playwright": "^1.44.0"
+  }
+}
