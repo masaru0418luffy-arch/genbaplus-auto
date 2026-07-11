@@ -371,13 +371,12 @@ class CompositeStoreWriter(StoreWriter):
 
 def create_store_writer(config: dict) -> StoreWriter:
     """
-    利用可能なストレージを全部束ねて返す。
-    - Supabase (.env 設定済み) → SupabaseStoreWriter
-    - Google Sheets (credentials.json 存在) → GoogleSheetsWriter
-    - どちらもなければ CSV
-    複数が有効な場合は CompositeStoreWriter で同時書き込み。
+    CSV は常に書き込む（アプリの結果タブ表示・ローカルバックアップ用）。
+    Supabase / Google Sheets が使える場合はそれらにも同時書き込みする。
     """
-    writers = []
+    csv_file = config.get("output", {}).get("csv_file", "output/results.csv")
+    writers = [CSVStoreWriter(csv_file)]
+    logger.info(f"ストレージ: CSV を使用します ({csv_file})")
 
     # Supabase
     client = _get_supabase_client()
@@ -396,12 +395,6 @@ def create_store_writer(config: dict) -> StoreWriter:
             logger.info("ストレージ: Google Sheets を使用します")
     except Exception as e:
         logger.debug(f"Google Sheets 初期化スキップ: {e}")
-
-    # フォールバック: CSV
-    if not writers:
-        csv_file = config.get("output", {}).get("csv_file", "output/results.csv")
-        writers.append(CSVStoreWriter(csv_file))
-        logger.info(f"ストレージ: CSV を使用します ({csv_file})")
 
     return writers[0] if len(writers) == 1 else CompositeStoreWriter(writers)
 
