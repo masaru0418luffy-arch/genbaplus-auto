@@ -25,6 +25,8 @@ filters:
   max_review_count: 10
   # 写真投稿日が1年以内の店舗のみ抽出（True推奨）
   require_photo_within_year: true
+  # 法人のみ抽出（株式会社・有限会社・合同会社等を含む店舗名のみ）
+  corporation_only: false
 
 # --- 待機時間設定（レート制限・CAPTCHA回避） ---
 delays:

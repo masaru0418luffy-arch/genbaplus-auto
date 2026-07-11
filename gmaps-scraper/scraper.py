@@ -195,6 +195,18 @@ class CSVWriter:
 # ---------------------------------------------------------------------------
 # 日本語相対日付パーサー
 # ---------------------------------------------------------------------------
+CORPORATION_KEYWORDS = [
+    "株式会社", "有限会社", "合同会社", "合資会社", "合名会社",
+    "一般社団法人", "一般財団法人", "公益社団法人", "公益財団法人",
+    "医療法人", "社会福祉法人", "学校法人", "宗教法人",
+    "特定非営利活動法人", "NPO法人", "協同組合", "農業協同組合",
+]
+
+def is_corporation(name: str) -> bool:
+    """店舗名に法人格キーワードが含まれるか判定する。"""
+    return any(kw in name for kw in CORPORATION_KEYWORDS)
+
+
 class JapaneseDateParser:
     """Google マップに表示される日本語相対日付を解析し、1年以内か判定する。"""
 
@@ -874,6 +886,7 @@ async def run_scraper(
     areas = search_cfg.get("areas", [])
     max_items = int(search_cfg.get("max_items_per_run", 30))
     max_review = int(filters.get("max_review_count", 10))
+    corporation_only = bool(filters.get("corporation_only", False))
 
     date_parser = JapaneseDateParser()
 
@@ -932,6 +945,15 @@ async def run_scraper(
                     if store is None:
                         error_count += 1
                         await scraper._random_delay()
+                        continue
+
+                    # 法人フィルタ
+                    if corporation_only and not is_corporation(store.company_name):
+                        logger.debug(f"除外 (法人でない): {store.company_name}")
+                        filtered_count += 1
+                        progress_manager.mark_url_completed(url)
+                        await scraper._random_delay()
+                        await scraper._cooldown_if_needed()
                         continue
 
                     # 口コミ件数フィルタ
