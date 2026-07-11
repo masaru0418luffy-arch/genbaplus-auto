@@ -1,5 +1,17 @@
 node_modules/
 dist/
 .env
+.env.local
 *.log
 .DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# gmaps-scraper 出力・ログ（データは Git 管理外）
+gmaps-scraper/output/
+gmaps-scraper/logs/
+gmaps-scraper/progress.json

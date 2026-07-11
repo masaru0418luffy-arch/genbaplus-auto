@@ -13,5 +13,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onLoadSettings:   (cb) => ipcRenderer.on('load-settings',    (_, data) => cb(data)),
   onSettingsSaved:  (cb) => ipcRenderer.on('settings-saved',   () => cb()),
   saveSettings:     (s)  => ipcRenderer.send('save-settings',  s),
-  getSettings:      ()   => ipcRenderer.invoke('get-settings')
+  getSettings:      ()   => ipcRenderer.invoke('get-settings'),
+
+  // 営業リスト抽出ウィンドウ用
+  startScraper:         (params)  => ipcRenderer.send('scraper-start', params),
+  stopScraper:          ()        => ipcRenderer.send('scraper-stop'),
+  resetProgress:        ()        => ipcRenderer.send('scraper-reset-progress'),
+  onScraperLog:         (cb)      => ipcRenderer.on('scraper-log',      (_, msg) => cb(msg)),
+  onScraperDone:        (cb)      => ipcRenderer.on('scraper-done',     (_, s)   => cb(s)),
+  onScraperError:       (cb)      => ipcRenderer.on('scraper-error',    (_, msg) => cb(msg)),
+  saveScraperSettings:  (s)       => ipcRenderer.send('scraper-save-settings', s),
+  getScraperSettings:   ()        => ipcRenderer.send('scraper-get-settings'),
+  onScraperSettings:    (cb)      => ipcRenderer.on('scraper-settings', (_, s)   => cb(s)),
+  downloadCSV:          (content) => ipcRenderer.send('scraper-download-csv', content),
+  openCSVFolder:        ()        => ipcRenderer.send('scraper-open-csv-folder'),
 });

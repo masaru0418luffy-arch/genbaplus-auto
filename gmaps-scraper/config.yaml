@@ -1,0 +1,112 @@
+# ============================================================
+# Google マップ営業リスト自動抽出システム 設定ファイル
+# ============================================================
+
+# --- 検索条件 ---
+search:
+  keywords:
+    - 美容室
+    # - 飲食店
+    # - 税理士
+  areas:
+    - 東京都渋谷区
+    # - 東京都新宿区
+  # 1回の実行あたりの最大取得件数（フィルタ通過後の保存件数）
+  max_items_per_run: 30
+
+# --- フィルタ条件 ---
+filters:
+  # この件数以下の口コミ件数を持つ店舗のみ抽出
+  max_review_count: 10
+  # 写真投稿日が1年以内の店舗のみ抽出（True推奨）
+  require_photo_within_year: true
+
+# --- 待機時間設定（レート制限・CAPTCHA回避） ---
+delays:
+  # 通常の待機時間（秒）
+  min_seconds: 5
+  max_seconds: 15
+  # N件処理ごとにクールダウンを挟む
+  cooldown_every_n_items: 10
+  # クールダウン時間（秒）
+  cooldown_min_seconds: 60
+  cooldown_max_seconds: 120
+
+# --- 出力設定 ---
+output:
+  csv_file: output/results.csv
+  progress_file: progress.json
+  log_file: logs/scraper.log
+  log_level: INFO  # DEBUG, INFO, WARNING, ERROR
+
+# --- User-Agent ローテーション ---
+user_agents:
+  - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0"
+  - "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  - "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
+
+# ============================================================
+# DOM セレクタ定義
+# Google マップの DOM 構造は変更される可能性があります。
+# セレクタが機能しなくなった場合はここを更新してください。
+# ============================================================
+selectors:
+  # 検索結果のフィード（スクロール対象）
+  results_feed: 'div[role="feed"]'
+
+  # 検索結果内の各店舗リンク
+  result_item: 'a[href*="/maps/place/"]'
+
+  # 店舗名（詳細パネル）
+  store_name_list:
+    - 'h1.DUwDvf'
+    - 'h1[class*="fontHeadlineLarge"]'
+    - 'h1'
+
+  # 口コミ件数
+  review_count_list:
+    - 'button[aria-label*="件の口コミ"]'
+    - 'span[aria-label*="件の口コミ"]'
+    - '[aria-label*="reviews"]'
+    - '.F7nice'
+    - 'button[jsaction*="pane.rating.moreReviews"]'
+
+  # ウェブサイトリンク
+  website_link_list:
+    - 'a[data-item-id="authority"]'
+    - 'a[aria-label*="ウェブサイト"]'
+    - 'a[aria-label*="Website"]'
+    - 'div[data-item-id="authority"] a'
+
+  # 写真ボタン
+  photos_button_list:
+    - 'button[aria-label*="写真を見る"]'
+    - 'button[aria-label*="すべての写真を見る"]'
+    - 'div[class*="Uf0tqf"] button'
+    - 'a[href*="/photos"]'
+
+  # 写真の日付テキスト
+  photo_date_list:
+    - 'div[class*="Aa6Hff"]'
+    - 'span[class*="Aa6Hff"]'
+    - 'div[data-photo-timestamp]'
+    - '[aria-label*="前"]'
+
+  # CAPTCHA 検出用テキスト
+  captcha_indicators:
+    - "異常なトラフィック"
+    - "自動化されたクエリ"
+    - "reCAPTCHA"
+    - "I'm not a robot"
+    - "ロボットではありません"
+    - "unusual traffic"
+
+  # 同意ダイアログボタン
+  consent_buttons:
+    - 'button:has-text("すべて同意")'
+    - 'button:has-text("同意する")'
+    - 'button:has-text("Accept all")'
+    - '#L2AGLb'
+    - 'form[action*="consent"] button'

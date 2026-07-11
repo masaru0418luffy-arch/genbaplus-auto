@@ -1,9 +1,18 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain, Notification, nativeImage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, Notification, nativeImage, dialog, shell } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const { spawn } = require('child_process');
 const cron = require('node-cron');
 const Store = require('electron-store');
 const { generateWeeklyMessage, generateMonthlyMessage } = require('./templates');
 const { postToGenbaPlus } = require('./automation');
+
+// スクレイパーのルートディレクトリ
+const SCRAPER_DIR = path.join(__dirname, '..', 'gmaps-scraper');
+
+// scraper ウィンドウ管理
+let scraperWindow = null;
+let scraperProcess = null;
 
 // 設定の永続化
 const store = new Store({
@@ -84,6 +93,11 @@ function updateTrayMenu() {
     {
       label: '設定',
       click: () => openSettingsWindow()
+    },
+    { type: 'separator' },
+    {
+      label: '📋 営業リスト抽出',
+      click: () => openScraperWindow()
     },
     { type: 'separator' },
     {
@@ -267,4 +281,219 @@ function showNotification(title, body) {
   if (Notification.isSupported()) {
     new Notification({ title, body }).show();
   }
+}
+
+// -------------------------------------------------------
+// 営業リスト抽出ウィンドウ
+// -------------------------------------------------------
+function openScraperWindow() {
+  if (scraperWindow && !scraperWindow.isDestroyed()) {
+    scraperWindow.focus();
+    return;
+  }
+  scraperWindow = new BrowserWindow({
+    width: 1100,
+    height: 720,
+    minWidth: 800,
+    minHeight: 560,
+    title: '営業リスト抽出',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+    },
+  });
+  scraperWindow.loadFile(path.join(__dirname, '..', 'renderer', 'scraper', 'index.html'));
+  scraperWindow.on('closed', () => {
+    scraperWindow = null;
+    if (scraperProcess) { scraperProcess.kill(); scraperProcess = null; }
+  });
+}
+
+// -------------------------------------------------------
+// Scraper IPC ハンドラ
+// -------------------------------------------------------
+
+// Python scraper 起動
+ipcMain.on('scraper-start', (event, params) => {
+  if (scraperProcess) {
+    scraperProcess.kill();
+    scraperProcess = null;
+  }
+
+  // scraper.py に渡す一時設定ファイルを作成
+  const tmpConfig = buildTempConfig(params);
+  const tmpConfigPath = path.join(SCRAPER_DIR, '_tmp_config.yaml');
+  fs.writeFileSync(tmpConfigPath, tmpConfig, 'utf-8');
+
+  // Python 実行ファイルを探す（venv 優先）
+  const pythonCandidates = [
+    path.join(SCRAPER_DIR, '.venv', 'bin', 'python3'),
+    path.join(SCRAPER_DIR, '.venv', 'Scripts', 'python.exe'),
+    'python3',
+    'python',
+  ];
+  const pythonPath = pythonCandidates.find(p => {
+    try { return fs.existsSync(p); } catch { return false; }
+  }) || 'python3';
+
+  scraperProcess = spawn(pythonPath, ['scraper.py', '--config', '_tmp_config.yaml'], {
+    cwd: SCRAPER_DIR,
+    env: { ...process.env },
+  });
+
+  const send = (channel, msg) => {
+    if (scraperWindow && !scraperWindow.isDestroyed()) {
+      scraperWindow.webContents.send(channel, msg);
+    }
+  };
+
+  let outputBuffer = '';
+  let lastRows = [];
+
+  scraperProcess.stdout.on('data', (data) => {
+    const lines = (outputBuffer + data.toString()).split('\n');
+    outputBuffer = lines.pop();
+    lines.forEach(line => {
+      if (line.trim()) send('scraper-log', line.trim());
+    });
+  });
+
+  scraperProcess.stderr.on('data', (data) => {
+    const lines = data.toString().split('\n').filter(l => l.trim());
+    lines.forEach(line => send('scraper-log', '⚠️ ' + line));
+  });
+
+  scraperProcess.on('close', (code) => {
+    scraperProcess = null;
+    try { fs.unlinkSync(tmpConfigPath); } catch {}
+
+    // CSV を読み込んでサマリーと一緒に送る
+    const csvPath = path.join(SCRAPER_DIR, 'output', 'results.csv');
+    const rows = readCSV(csvPath);
+    const summary = readSummaryFromLog(params);
+    summary.rows = rows.slice(-100);  // 最新100件
+    summary.csvContent = fs.existsSync(csvPath) ? fs.readFileSync(csvPath, 'utf-8') : '';
+
+    send('scraper-done', summary);
+  });
+
+  scraperProcess.on('error', (err) => {
+    scraperProcess = null;
+    send('scraper-error', `Python 起動エラー: ${err.message}\n.venv がセットアップされているか確認してください。`);
+  });
+});
+
+// 停止
+ipcMain.on('scraper-stop', () => {
+  if (scraperProcess) { scraperProcess.kill('SIGINT'); scraperProcess = null; }
+});
+
+// 進捗リセット
+ipcMain.on('scraper-reset-progress', () => {
+  const p = path.join(SCRAPER_DIR, 'progress.json');
+  const init = { version: 1, searches: [], completed_urls: [], last_run_at: null, interrupted: false, interrupt_reason: null };
+  fs.writeFileSync(p, JSON.stringify(init, null, 2), 'utf-8');
+});
+
+// Supabase 設定の保存・読み込み
+ipcMain.on('scraper-save-settings', (event, settings) => {
+  const envPath = path.join(SCRAPER_DIR, '.env');
+  const content = [
+    `SUPABASE_URL=${settings.supabaseUrl || ''}`,
+    `SUPABASE_ANON_KEY=${settings.supabaseKey || ''}`,
+  ].join('\n') + '\n';
+  fs.writeFileSync(envPath, content, 'utf-8');
+});
+
+ipcMain.on('scraper-get-settings', (event) => {
+  const envPath = path.join(SCRAPER_DIR, '.env');
+  const settings = { supabaseUrl: '', supabaseKey: '' };
+  if (fs.existsSync(envPath)) {
+    const lines = fs.readFileSync(envPath, 'utf-8').split('\n');
+    lines.forEach(line => {
+      const [k, ...rest] = line.split('=');
+      const v = rest.join('=').trim();
+      if (k === 'SUPABASE_URL') settings.supabaseUrl = v;
+      if (k === 'SUPABASE_ANON_KEY') settings.supabaseKey = v;
+    });
+  }
+  if (scraperWindow && !scraperWindow.isDestroyed()) {
+    scraperWindow.webContents.send('scraper-settings', settings);
+  }
+});
+
+// CSV ダウンロード（保存ダイアログ）
+ipcMain.on('scraper-download-csv', async (event, content) => {
+  const { filePath } = await dialog.showSaveDialog({
+    title: 'CSV を保存',
+    defaultPath: `results_${new Date().toISOString().slice(0,10)}.csv`,
+    filters: [{ name: 'CSV', extensions: ['csv'] }],
+  });
+  if (filePath) fs.writeFileSync(filePath, '﻿' + content, 'utf-8');
+});
+
+ipcMain.on('scraper-open-csv-folder', () => {
+  shell.openPath(path.join(SCRAPER_DIR, 'output'));
+});
+
+// -------------------------------------------------------
+// ヘルパー関数
+// -------------------------------------------------------
+function buildTempConfig(params) {
+  return [
+    'search:',
+    `  keywords: [${params.keywords.map(k => `"${k}"`).join(', ')}]`,
+    `  areas: [${params.areas.map(a => `"${a}"`).join(', ')}]`,
+    `  max_items_per_run: ${params.maxItems || 30}`,
+    'filters:',
+    `  max_review_count: ${params.maxReview || 10}`,
+    '  require_photo_within_year: true',
+    'delays:',
+    `  min_seconds: ${params.delayMin || 5}`,
+    `  max_seconds: ${params.delayMax || 15}`,
+    '  cooldown_every_n_items: 10',
+    '  cooldown_min_seconds: 60',
+    '  cooldown_max_seconds: 120',
+    'output:',
+    '  csv_file: output/results.csv',
+    '  progress_file: progress.json',
+    '  log_file: logs/scraper.log',
+    '  log_level: INFO',
+  ].join('\n');
+}
+
+function readCSV(csvPath) {
+  if (!fs.existsSync(csvPath)) return [];
+  try {
+    const lines = fs.readFileSync(csvPath, 'utf-8').split('\n').filter(Boolean);
+    if (lines.length < 2) return [];
+    const headers = lines[0].split(',').map(h => h.replace(/^﻿/, '').trim().replace(/"/g, ''));
+    return lines.slice(1).map(line => {
+      const vals = line.split(',');
+      const obj = {};
+      headers.forEach((h, i) => { obj[h] = (vals[i] || '').trim().replace(/"/g, ''); });
+      return obj;
+    });
+  } catch { return []; }
+}
+
+function readSummaryFromLog(params) {
+  const logPath = path.join(SCRAPER_DIR, 'logs', 'scraper.log');
+  const summary = { new_count: 0, total_count: 0, filtered_count: 0, error_count: 0, captcha_interrupted: false };
+  try {
+    const csvRows = readCSV(path.join(SCRAPER_DIR, 'output', 'results.csv'));
+    summary.total_count = csvRows.length;
+    // 最後のサマリー行から読み取る
+    if (fs.existsSync(logPath)) {
+      const log = fs.readFileSync(logPath, 'utf-8');
+      const mNew = log.match(/新規取得件数\s*:\s*(\d+)/g);
+      if (mNew) summary.new_count = parseInt(mNew[mNew.length - 1].match(/\d+/)[0]);
+      const mFil = log.match(/フィルタ除外\s*:\s*(\d+)/g);
+      if (mFil) summary.filtered_count = parseInt(mFil[mFil.length - 1].match(/\d+/)[0]);
+      const mErr = log.match(/取得失敗\s*:\s*(\d+)/g);
+      if (mErr) summary.error_count = parseInt(mErr[mErr.length - 1].match(/\d+/)[0]);
+      summary.captcha_interrupted = log.includes('CAPTCHA により途中終了');
+    }
+  } catch {}
+  return summary;
 }
