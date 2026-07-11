@@ -929,18 +929,21 @@ async def run_scraper(
                     progress_manager.set_interrupted("CAPTCHA detected during search")
                     break
 
+                total_urls = len(store_urls)
+                process_count = 0
+
                 for url in store_urls:
                     if new_count >= max_items:
                         break
 
                     # 取得済みスキップ
                     if progress_manager.is_url_completed(url):
-                        self_msg = f"スキップ (取得済み): {url[:70]}"
-                        logger.debug(self_msg)
+                        logger.debug(f"スキップ (取得済み): {url[:70]}")
                         skipped_count += 1
                         continue
 
-                    logger.info(f"取得中 [{new_count + 1}/{max_items}]: {url[:70]}")
+                    process_count += 1
+                    logger.info(f"処理中 [{process_count}件目 / 全{total_urls}件]: {url[:70]}")
 
                     store = await scraper.get_store_details(url, keyword)
                     scraper._items_processed += 1
@@ -1006,7 +1009,7 @@ async def run_scraper(
                         else "取得不可"
                     )
 
-                    # CSV 保存（逐次追記）
+                    # 保存（逐次追記）
                     csv_writer.write_row(store)
                     progress_manager.mark_url_completed(url)
                     new_count += 1
@@ -1018,6 +1021,10 @@ async def run_scraper(
                         f"WS:{store.website_url[:40] if store.website_url else 'なし'}"
                     )
                     logger.info(log_line)
+
+                    # Electron にリアルタイムで保存データを通知（stdout 経由）
+                    import json as _json
+                    print(f"SAVED_JSON:{_json.dumps(asdict(store), ensure_ascii=False)}", flush=True)
 
                     if ui_callback:
                         ui_callback(new_count, max_items, log_line)
