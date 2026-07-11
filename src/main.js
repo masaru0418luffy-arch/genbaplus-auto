@@ -370,7 +370,7 @@ ipcMain.on('scraper-start', (event, params) => {
     // CSV を読み込んでサマリーと一緒に送る
     const csvPath = path.join(SCRAPER_DIR, 'output', 'results.csv');
     const rows = readCSV(csvPath);
-    const summary = readSummaryFromLog(params);
+    const summary = readSummaryFromLog();
     summary.rows = rows.slice(-100);  // 最新100件
     summary.csvContent = fs.existsSync(csvPath) ? fs.readFileSync(csvPath, 'utf-8') : '';
 
@@ -439,18 +439,27 @@ ipcMain.on('scraper-open-csv-folder', () => {
 // -------------------------------------------------------
 // ヘルパー関数
 // -------------------------------------------------------
+
+// YAML の文字列値をシングルクォートで安全にエスケープする
+function yamlStr(s) {
+  return "'" + String(s).replace(/'/g, "''") + "'";
+}
+
+// 一時 config.yaml を生成（YAML 特殊文字に対応）
 function buildTempConfig(params) {
+  const kw = params.keywords.map(k => `  - ${yamlStr(k)}`).join('\n');
+  const ar = params.areas.map(a => `  - ${yamlStr(a)}`).join('\n');
   return [
     'search:',
-    `  keywords: [${params.keywords.map(k => `"${k}"`).join(', ')}]`,
-    `  areas: [${params.areas.map(a => `"${a}"`).join(', ')}]`,
-    `  max_items_per_run: ${params.maxItems || 30}`,
+    `  keywords:\n${kw}`,
+    `  areas:\n${ar}`,
+    `  max_items_per_run: ${parseInt(params.maxItems) || 30}`,
     'filters:',
-    `  max_review_count: ${params.maxReview || 10}`,
+    `  max_review_count: ${parseInt(params.maxReview) || 10}`,
     '  require_photo_within_year: true',
     'delays:',
-    `  min_seconds: ${params.delayMin || 5}`,
-    `  max_seconds: ${params.delayMax || 15}`,
+    `  min_seconds: ${parseFloat(params.delayMin) || 5}`,
+    `  max_seconds: ${parseFloat(params.delayMax) || 15}`,
     '  cooldown_every_n_items: 10',
     '  cooldown_min_seconds: 60',
     '  cooldown_max_seconds: 120',
@@ -462,36 +471,56 @@ function buildTempConfig(params) {
   ].join('\n');
 }
 
+// RFC 4180 準拠の簡易 CSV パーサー（カンマ・改行を含むフィールドに対応）
 function readCSV(csvPath) {
   if (!fs.existsSync(csvPath)) return [];
   try {
-    const lines = fs.readFileSync(csvPath, 'utf-8').split('\n').filter(Boolean);
-    if (lines.length < 2) return [];
-    const headers = lines[0].split(',').map(h => h.replace(/^﻿/, '').trim().replace(/"/g, ''));
-    return lines.slice(1).map(line => {
-      const vals = line.split(',');
+    const raw = fs.readFileSync(csvPath, 'utf-8').replace(/^﻿/, ''); // BOM 除去
+    const rows = parseCSVRFC(raw);
+    if (rows.length < 2) return [];
+    const headers = rows[0];
+    return rows.slice(1).filter(r => r.some(c => c)).map(vals => {
       const obj = {};
-      headers.forEach((h, i) => { obj[h] = (vals[i] || '').trim().replace(/"/g, ''); });
+      headers.forEach((h, i) => { obj[h] = vals[i] || ''; });
       return obj;
     });
   } catch { return []; }
 }
 
-function readSummaryFromLog(params) {
+function parseCSVRFC(text) {
+  const rows = [];
+  let row = [], cell = '', inQuote = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuote) {
+      if (c === '"' && text[i + 1] === '"') { cell += '"'; i++; }
+      else if (c === '"') { inQuote = false; }
+      else { cell += c; }
+    } else {
+      if (c === '"') { inQuote = true; }
+      else if (c === ',') { row.push(cell); cell = ''; }
+      else if (c === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+      else if (c !== '\r') { cell += c; }
+    }
+  }
+  if (cell || row.length) { row.push(cell); rows.push(row); }
+  return rows;
+}
+
+function readSummaryFromLog() {
   const logPath = path.join(SCRAPER_DIR, 'logs', 'scraper.log');
   const summary = { new_count: 0, total_count: 0, filtered_count: 0, error_count: 0, captcha_interrupted: false };
   try {
-    const csvRows = readCSV(path.join(SCRAPER_DIR, 'output', 'results.csv'));
-    summary.total_count = csvRows.length;
-    // 最後のサマリー行から読み取る
+    summary.total_count = readCSV(path.join(SCRAPER_DIR, 'output', 'results.csv')).length;
     if (fs.existsSync(logPath)) {
       const log = fs.readFileSync(logPath, 'utf-8');
-      const mNew = log.match(/新規取得件数\s*:\s*(\d+)/g);
-      if (mNew) summary.new_count = parseInt(mNew[mNew.length - 1].match(/\d+/)[0]);
-      const mFil = log.match(/フィルタ除外\s*:\s*(\d+)/g);
-      if (mFil) summary.filtered_count = parseInt(mFil[mFil.length - 1].match(/\d+/)[0]);
-      const mErr = log.match(/取得失敗\s*:\s*(\d+)/g);
-      if (mErr) summary.error_count = parseInt(mErr[mErr.length - 1].match(/\d+/)[0]);
+      const last = (pattern) => {
+        const all = log.match(pattern);
+        return all ? parseInt(all[all.length - 1].match(/\d+/)[0]) : 0;
+      };
+      summary.new_count      = last(/新規取得件数\s*:\s*\d+/g);
+      summary.filtered_count = last(/フィルタ除外\s*:\s*\d+/g);
+      summary.error_count    = last(/取得失敗\s*:\s*\d+/g);
       summary.captcha_interrupted = log.includes('CAPTCHA により途中終了');
     }
   } catch {}

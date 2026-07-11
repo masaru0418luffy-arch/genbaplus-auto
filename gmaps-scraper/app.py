@@ -30,13 +30,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scraper import (
-    CSVWriter,
     JapaneseDateParser,
-    ProgressManager,
     load_config,
     run_scraper,
     setup_logging,
 )
+from storage import create_progress_store, create_store_writer
 
 # ---------------------------------------------------------------------------
 # ページ設定
@@ -115,12 +114,11 @@ class ScraperRunner:
     def _run(self) -> None:
         out = self.config.get("output", {})
         log_file = out.get("log_file", "logs/scraper.log")
-        csv_file = out.get("csv_file", "output/results.csv")
-        progress_file = out.get("progress_file", "progress.json")
 
         logger = setup_logging(log_file)
-        progress_manager = ProgressManager(progress_file)
-        csv_writer = CSVWriter(csv_file)
+        # storage モジュールが .env を見て CSV/Supabase を自動選択する
+        progress_manager = create_progress_store(self.config)
+        csv_writer = create_store_writer(self.config)
 
         try:
             loop = asyncio.new_event_loop()

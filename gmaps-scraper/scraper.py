@@ -145,6 +145,14 @@ class ProgressManager:
         self.data["last_run_at"] = datetime.now().isoformat()
         self.save()
 
+    def get_status(self) -> dict:
+        return {
+            "interrupted": self.data.get("interrupted", False),
+            "interrupt_reason": self.data.get("interrupt_reason"),
+            "last_run_at": self.data.get("last_run_at"),
+            "completed_url_count": len(self.data.get("completed_urls", [])),
+        }
+
 
 # ---------------------------------------------------------------------------
 # CSV ライター（逐次追記）
