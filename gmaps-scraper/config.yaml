@@ -2,6 +2,11 @@
 # Google マップ営業リスト自動抽出システム 設定ファイル
 # ============================================================
 
+# --- Google スプレッドシート ---
+sheets:
+  spreadsheet_id: "1gd4-WX_57Ctb2jLO9v3fuGFCqUi6c_zN1wWv3z1vGcU"
+  # credentials.json を gmaps-scraper/ フォルダに置くと自動的に有効になります
+
 # --- 検索条件 ---
 search:
   keywords:
@@ -65,12 +70,19 @@ selectors:
     - 'h1[class*="fontHeadlineLarge"]'
     - 'h1'
 
-  # 住所
+  # 住所（複数セレクタ + JSON-LD フォールバックで取得率向上）
   address_list:
     - 'button[data-item-id="address"]'
     - 'div[data-item-id="address"]'
     - '[aria-label*="住所"]'
     - 'button[aria-label*="番地"]'
+
+  # 電話番号
+  phone_list:
+    - 'button[data-item-id^="phone:tel:"]'
+    - 'a[href^="tel:"]'
+    - '[aria-label*="電話番号"]'
+    - '[data-tooltip*="電話"]'
 
   # 口コミ件数
   review_count_list:

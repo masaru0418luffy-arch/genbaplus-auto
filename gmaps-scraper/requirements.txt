@@ -25,3 +25,7 @@ supabase>=2.3.0
 
 # .env ファイル読み込み
 python-dotenv>=1.0.0
+
+# Google スプレッドシート（credentials.json を配置した場合のみ使用）
+gspread>=6.0.0
+google-auth>=2.0.0

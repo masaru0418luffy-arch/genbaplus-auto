@@ -283,6 +283,7 @@
               <th>店舗名</th>
               <th>業種</th>
               <th>住所</th>
+              <th>電話番号</th>
               <th>口コミ</th>
               <th>写真日付</th>
               <th>ウェブサイト</th>
@@ -291,7 +292,7 @@
             </tr>
           </thead>
           <tbody id="resultBody">
-            <tr><td colspan="9" style="text-align:center;padding:20px;color:#9ca3af">データがありません</td></tr>
+            <tr><td colspan="10" style="text-align:center;padding:20px;color:#9ca3af">データがありません</td></tr>
           </tbody>
         </table>
       </div>
@@ -461,6 +462,7 @@ function renderTable(rows) {
       <td title="${r.company_name || ''}">${r.company_name || '-'}</td>
       <td>${r.industry || '-'}</td>
       <td title="${r.address || ''}">${truncate(r.address, 20)}</td>
+      <td>${r.phone || '-'}</td>
       <td>${r.review_count ?? '-'}</td>
       <td>${r.last_photo_posted_date || '-'}</td>
       <td><a href="${r.website_url}" title="${r.website_url}" style="color:#2563eb">${truncate(r.website_url, 25)}</a></td>

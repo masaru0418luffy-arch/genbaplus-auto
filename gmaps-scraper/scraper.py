@@ -63,6 +63,7 @@ class StoreData:
     company_name: str = ""
     industry: str = ""
     address: str = ""
+    phone: str = ""
     instagram_url: str = ""
     website_url: str = ""
     review_count: int = 0
@@ -525,6 +526,9 @@ class GoogleMapsScraper:
             # 住所
             store.address = await self._get_address()
 
+            # 電話番号
+            store.phone = await self._get_phone()
+
             # 口コミ件数
             store.review_count = await self._get_review_count()
 
@@ -546,12 +550,11 @@ class GoogleMapsScraper:
         return store
 
     async def _get_address(self) -> str:
-        """店舗の住所を取得する。"""
+        """店舗の住所を取得する（複数戦略で取得率を最大化）。"""
+        # ── 戦略1: data-item-id="address" のボタン（最も確実）──
         sels = self.selectors.get("address_list", [
             'button[data-item-id="address"]',
             'div[data-item-id="address"]',
-            '[aria-label*="住所"]',
-            'button[aria-label*="番地"]',
         ])
         if isinstance(sels, str):
             sels = [sels]
@@ -559,28 +562,120 @@ class GoogleMapsScraper:
             try:
                 el = await self.page.query_selector(sel)
                 if el:
-                    text = (
-                        await el.get_attribute("aria-label")
-                        or await el.text_content()
-                        or ""
-                    ).strip()
-                    # "住所:" や "住所: " のプレフィックスを除去
+                    # aria-label に完全な住所が入っていることが多い
+                    text = await el.get_attribute("aria-label") or ""
                     text = re.sub(r"^住所[:：]\s*", "", text).strip()
-                    if text:
+                    if text and len(text) > 5:
+                        return text
+                    # aria-label がなければ子テキストを取得
+                    text = await el.text_content() or ""
+                    text = re.sub(r"^住所[:：]\s*", "", text).strip()
+                    if text and len(text) > 5:
                         return text
             except Exception:
                 continue
 
-        # フォールバック: ページ内の住所パターン（日本の郵便番号 or 都道府県で始まる行）
+        # ── 戦略2: JSON-LD 構造化データから取得（Google が必ず埋め込む） ──
+        try:
+            content = await self.page.content()
+            import json as _json
+            for chunk in re.findall(
+                r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+                content, re.DOTALL
+            ):
+                try:
+                    obj = _json.loads(chunk)
+                    # 単体または配列
+                    items = obj if isinstance(obj, list) else [obj]
+                    for item in items:
+                        addr = item.get("address", {})
+                        if isinstance(addr, str) and len(addr) > 5:
+                            return addr
+                        if isinstance(addr, dict):
+                            parts = [
+                                addr.get("addressRegion", ""),
+                                addr.get("addressLocality", ""),
+                                addr.get("streetAddress", ""),
+                            ]
+                            full = "".join(p for p in parts if p)
+                            if full and len(full) > 5:
+                                return full
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        # ── 戦略3: aria-label に〒/都道府県が含まれる要素を探す ──
+        try:
+            pref_pattern = (
+                r"(?:〒\d{3}-\d{4}|北海道|青森|岩手|宮城|秋田|山形|福島|茨城|栃木|群馬"
+                r"|埼玉|千葉|東京|神奈川|新潟|富山|石川|福井|山梨|長野|岐阜|静岡|愛知"
+                r"|三重|滋賀|京都|大阪|兵庫|奈良|和歌山|鳥取|島根|岡山|広島|山口|徳島"
+                r"|香川|愛媛|高知|福岡|佐賀|長崎|熊本|大分|宮崎|鹿児島|沖縄)"
+            )
+            els = await self.page.query_selector_all("[aria-label]")
+            for el in els:
+                label = await el.get_attribute("aria-label") or ""
+                if re.search(pref_pattern, label) and 8 < len(label) < 100:
+                    clean = re.sub(r"^住所[:：]\s*", "", label).strip()
+                    if clean:
+                        return clean
+        except Exception:
+            pass
+
+        # ── 戦略4: ページ全文から郵便番号パターンで抽出 ──
+        try:
+            content = await self.page.content()
+            m = re.search(r"〒\s*\d{3}-\d{4}[^\n<\"']{3,60}", content)
+            if m:
+                return re.sub(r"\s+", " ", m.group(0)).strip()
+        except Exception:
+            pass
+
+        return ""
+
+    async def _get_phone(self) -> str:
+        """電話番号を取得する。"""
+        sels = self.selectors.get("phone_list", [
+            'button[data-item-id^="phone:tel:"]',
+            'a[href^="tel:"]',
+            '[aria-label*="電話番号"]',
+            '[data-tooltip*="電話"]',
+        ])
+        if isinstance(sels, str):
+            sels = [sels]
+
+        for sel in sels:
+            try:
+                el = await self.page.query_selector(sel)
+                if el:
+                    # href="tel:0312345678" から番号を取得
+                    href = await el.get_attribute("href") or ""
+                    if href.startswith("tel:"):
+                        return href[4:].strip()
+                    # aria-label から取得
+                    label = await el.get_attribute("aria-label") or ""
+                    m = re.search(r"[\d\-()（）+\s]{7,20}", label)
+                    if m:
+                        return m.group(0).strip()
+                    # data-item-id="phone:tel:XXXXXXXXXX" から取得
+                    item_id = await el.get_attribute("data-item-id") or ""
+                    if item_id.startswith("phone:tel:"):
+                        return item_id.replace("phone:tel:", "").strip()
+                    # テキストから取得
+                    text = await el.text_content() or ""
+                    m = re.search(r"[\d\-()（）+\s]{7,20}", text)
+                    if m:
+                        return m.group(0).strip()
+            except Exception:
+                continue
+
+        # フォールバック: ページ全文から日本の電話番号パターンを抽出
         try:
             content = await self.page.content()
             m = re.search(
-                r"〒?\d{3}-?\d{4}[^<\"]{1,60}|"
-                r"(?:北海道|青森|岩手|宮城|秋田|山形|福島|茨城|栃木|群馬|埼玉|千葉|東京|神奈川"
-                r"|新潟|富山|石川|福井|山梨|長野|岐阜|静岡|愛知|三重|滋賀|京都|大阪|兵庫|奈良|和歌山"
-                r"|鳥取|島根|岡山|広島|山口|徳島|香川|愛媛|高知|福岡|佐賀|長崎|熊本|大分|宮崎|鹿児島|沖縄)"
-                r"[^<\"]{1,60}",
-                content,
+                r"0\d{1,4}[-\s（()）]\d{1,4}[-\s（()）]\d{3,4}",
+                content
             )
             if m:
                 return m.group(0).strip()

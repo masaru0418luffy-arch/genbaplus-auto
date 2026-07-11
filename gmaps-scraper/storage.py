@@ -67,7 +67,7 @@ class ProgressStore(ABC):
 # CSV バックエンド（ローカル保存）
 # ---------------------------------------------------------------------------
 FIELDNAMES = [
-    "company_name", "industry", "address", "instagram_url", "website_url",
+    "company_name", "industry", "address", "phone", "instagram_url", "website_url",
     "review_count", "last_photo_posted_date", "website_domain_creation_date",
     "google_maps_url", "scraped_at",
 ]
@@ -343,19 +343,67 @@ class SupabaseProgressStore(ProgressStore):
 # ---------------------------------------------------------------------------
 # ファクトリ関数（自動選択）
 # ---------------------------------------------------------------------------
+class CompositeStoreWriter(StoreWriter):
+    """複数のライターに同時書き込みする。一部が失敗しても他は継続する。"""
+
+    def __init__(self, writers: list):
+        self.writers = writers
+
+    def write_row(self, store) -> None:
+        for w in self.writers:
+            try:
+                w.write_row(store)
+            except Exception as e:
+                logger.error(f"{type(w).__name__} 書き込みエラー（スキップ）: {e}")
+
+    def count_rows(self) -> int:
+        counts = []
+        for w in self.writers:
+            try:
+                counts.append(w.count_rows())
+            except Exception:
+                pass
+        return max(counts) if counts else 0
+
+    def is_url_saved(self, google_maps_url: str) -> bool:
+        return any(w.is_url_saved(google_maps_url) for w in self.writers)
+
+
 def create_store_writer(config: dict) -> StoreWriter:
     """
-    SUPABASE_URL/KEY が .env に設定されていれば Supabase、
-    それ以外は CSV を使用する。
+    利用可能なストレージを全部束ねて返す。
+    - Supabase (.env 設定済み) → SupabaseStoreWriter
+    - Google Sheets (credentials.json 存在) → GoogleSheetsWriter
+    - どちらもなければ CSV
+    複数が有効な場合は CompositeStoreWriter で同時書き込み。
     """
+    writers = []
+
+    # Supabase
     client = _get_supabase_client()
     if client:
+        writers.append(SupabaseStoreWriter())
         logger.info("ストレージ: Supabase を使用します")
-        return SupabaseStoreWriter()
-    else:
+
+    # Google Sheets
+    try:
+        from sheets import GoogleSheetsWriter, is_available
+        if is_available():
+            sheets_id = config.get("sheets", {}).get(
+                "spreadsheet_id", "1gd4-WX_57Ctb2jLO9v3fuGFCqUi6c_zN1wWv3z1vGcU"
+            )
+            writers.append(GoogleSheetsWriter(sheets_id))
+            logger.info("ストレージ: Google Sheets を使用します")
+    except Exception as e:
+        logger.debug(f"Google Sheets 初期化スキップ: {e}")
+
+    # フォールバック: CSV
+    if not writers:
         csv_file = config.get("output", {}).get("csv_file", "output/results.csv")
+        writers.append(CSVStoreWriter(csv_file))
         logger.info(f"ストレージ: CSV を使用します ({csv_file})")
-        return CSVStoreWriter(csv_file)
+
+    return writers[0] if len(writers) == 1 else CompositeStoreWriter(writers)
 
 
 def create_progress_store(config: dict) -> ProgressStore:
