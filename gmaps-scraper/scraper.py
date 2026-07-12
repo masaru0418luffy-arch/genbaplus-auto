@@ -578,8 +578,7 @@ class GoogleMapsScraper:
             # Instagram URL
             store.instagram_url = await self._get_instagram_url(store.website_url)
 
-            # 最新写真投稿日
-            store.last_photo_posted_date = await self._get_last_photo_date(store_url)
+            # 写真投稿日は run_scraper 側で早期フィルタ通過後に取得する
 
             store.scraped_at = datetime.now().isoformat()
 
@@ -1018,7 +1017,8 @@ async def run_scraper(
                         continue
 
                     process_count += 1
-                    logger.info(f"処理中 [{process_count}件目 / 全{total_urls}件]: {url[:70]}")
+                    # [X/Y] 形式で出力 → Electron 側の進捗バーに反映される
+                    logger.info(f"処理中 [{process_count}/{max_items}] {url[:70]}")
 
                     store = await scraper.get_store_details(url, keyword)
                     scraper._items_processed += 1
@@ -1033,7 +1033,7 @@ async def run_scraper(
                         await scraper._random_delay()
                         continue
 
-                    # 法人フィルタ
+                    # 法人フィルタ（写真取得の前に適用してコストを削減）
                     if corporation_only and not is_corporation(store.company_name):
                         logger.debug(f"除外 (法人でない): {store.company_name}")
                         filtered_count += 1
@@ -1042,7 +1042,7 @@ async def run_scraper(
                         await scraper._cooldown_if_needed()
                         continue
 
-                    # 口コミ件数フィルタ
+                    # 口コミ件数フィルタ（写真取得の前に適用してコストを削減）
                     if store.review_count > max_review:
                         logger.debug(
                             f"除外 (口コミ {store.review_count}件 > {max_review}件): {store.company_name}"
@@ -1052,6 +1052,9 @@ async def run_scraper(
                         await scraper._random_delay()
                         await scraper._cooldown_if_needed()
                         continue
+
+                    # 写真投稿日取得（法人・口コミフィルタを通過した店舗のみ実施）
+                    store.last_photo_posted_date = await scraper._get_last_photo_date(url)
 
                     # 写真投稿日フィルタ
                     within_year, photo_str = date_parser.is_within_one_year(
