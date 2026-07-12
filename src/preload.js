@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   stopScraper:          ()        => ipcRenderer.send('scraper-stop'),
   resetProgress:        ()        => ipcRenderer.send('scraper-reset-progress'),
   onScraperLog:         (cb)      => ipcRenderer.on('scraper-log',      (_, msg) => cb(msg)),
+  onScraperRow:         (cb)      => ipcRenderer.on('scraper-row',      (_, row) => cb(row)),
   onScraperDone:        (cb)      => ipcRenderer.on('scraper-done',     (_, s)   => cb(s)),
   onScraperError:       (cb)      => ipcRenderer.on('scraper-error',    (_, msg) => cb(msg)),
   saveScraperSettings:  (s)       => ipcRenderer.send('scraper-save-settings', s),

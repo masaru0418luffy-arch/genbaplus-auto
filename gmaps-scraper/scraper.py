@@ -165,6 +165,8 @@ class CSVWriter:
     FIELDNAMES = [
         "company_name",
         "industry",
+        "address",
+        "phone",
         "instagram_url",
         "website_url",
         "review_count",
@@ -418,9 +420,11 @@ class GoogleMapsScraper:
             except Exception:
                 continue
 
-    async def _try_selectors(self, selector_key: str, attr: str | None = None) -> str:
+    async def _try_selectors(
+        self, selector_key: str, attr: str | None = None, defaults: list | None = None
+    ) -> str:
         """複数のセレクタを順に試し、最初にマッチした要素のテキスト or 属性値を返す。"""
-        sels = self.selectors.get(selector_key, [])
+        sels = self.selectors.get(selector_key, defaults or [])
         if isinstance(sels, str):
             sels = [sels]
         for sel in sels:
@@ -533,7 +537,12 @@ class GoogleMapsScraper:
                 return None
 
             # 店舗名（複数セレクタ + ページタイトルフォールバック）
-            store.company_name = await self._try_selectors("store_name_list")
+            store.company_name = await self._try_selectors("store_name_list", defaults=[
+                "h1",
+                "[data-attrid='title']",
+                "div.fontHeadlineLarge",
+                "h1.DUwDvf",
+            ])
             if not store.company_name:
                 # ページタイトルから取得（「店舗名 - Google マップ」形式）
                 try:
@@ -661,6 +670,7 @@ class GoogleMapsScraper:
             'a[href^="tel:"]',
             '[aria-label*="電話番号"]',
             '[data-tooltip*="電話"]',
+            '[aria-label*="電話"]',
         ])
         if isinstance(sels, str):
             sels = [sels]
@@ -737,7 +747,12 @@ class GoogleMapsScraper:
         return 0
 
     async def _get_website_url(self) -> str:
-        sels = self.selectors.get("website_link_list", [])
+        sels = self.selectors.get("website_link_list", [
+            'a[data-item-id="authority"]',
+            'a[aria-label*="ウェブサイト"]',
+            'a[aria-label*="website"]',
+            'a[jsaction*="pane.aboutpage.websiteClick"]',
+        ])
         if isinstance(sels, str):
             sels = [sels]
         for sel in sels:
@@ -749,6 +764,20 @@ class GoogleMapsScraper:
                         return href
             except Exception:
                 continue
+
+        # フォールバック: ページ全文から外部リンクを探す
+        try:
+            content = await self.page.content()
+            m = re.search(
+                r'"(https?://(?!(?:www\.)?google\.com)[^"]{8,120})"',
+                content,
+            )
+            if m:
+                url = m.group(1)
+                if "." in url and not any(x in url for x in ["maps", "gstatic", "googleapis", "schema.org"]):
+                    return url
+        except Exception:
+            pass
         return ""
 
     async def _get_instagram_url(self, website_url: str) -> str:
@@ -797,7 +826,12 @@ class GoogleMapsScraper:
             return ""
 
         # 写真ボタンをクリック
-        photo_sels = self.selectors.get("photos_button_list", [])
+        photo_sels = self.selectors.get("photos_button_list", [
+            'button[aria-label*="写真を見る"]',
+            'button[aria-label*="すべての写真"]',
+            'button[aria-label*="写真"]',
+            'a[href*="/photos"]',
+        ])
         if isinstance(photo_sels, str):
             photo_sels = [photo_sels]
 
@@ -823,8 +857,18 @@ class GoogleMapsScraper:
             except Exception:
                 pass
 
-        # 日付テキストを探す
-        date_sels = self.selectors.get("photo_date_list", [])
+        # 日付テキストを探す（aria-label も含めて確認）
+        date_sels = self.selectors.get("photo_date_list", [
+            "time",
+            "[aria-label*='日前']",
+            "[aria-label*='週間前']",
+            "[aria-label*='か月前']",
+            "[aria-label*='年前']",
+            "[aria-label*='今日']",
+            "[aria-label*='昨日']",
+            "[aria-label*='今週']",
+            "[aria-label*='先週']",
+        ])
         if isinstance(date_sels, str):
             date_sels = [date_sels]
 
@@ -832,10 +876,15 @@ class GoogleMapsScraper:
             try:
                 els = await self.page.query_selector_all(sel)
                 for el in els:
-                    text = await el.text_content() or ""
+                    # aria-label と text_content の両方を確認
+                    text = (
+                        await el.get_attribute("aria-label")
+                        or await el.get_attribute("datetime")
+                        or await el.text_content()
+                        or ""
+                    )
                     date = find_date_in_text(text)
                     if date:
-                        # 元のページに戻る
                         try:
                             await self.page.go_back()
                             await asyncio.sleep(1)
@@ -845,7 +894,7 @@ class GoogleMapsScraper:
             except Exception:
                 continue
 
-        # ページ全文から抽出（最初にマッチしたもの＝最新に近い）
+        # ページ全文から抽出（写真ページに限定しているので口コミ日付との混同リスクは低い）
         try:
             content = await self.page.content()
             date = find_date_in_text(content)

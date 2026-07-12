@@ -360,6 +360,9 @@ function switchTab(name) {
 // ──────────────────────────────────────────────────
 // スクレイパー実行
 // ──────────────────────────────────────────────────
+let _liveRows = [];
+let _liveNewCount = 0;
+
 function startScraper() {
   const params = {
     keywords:  document.getElementById('keywords').value.trim().split('\n').filter(Boolean),
@@ -374,6 +377,18 @@ function startScraper() {
     appendLog('❌ 業種とエリアを入力してください');
     return;
   }
+
+  // 実行ごとにリアルタイム行データをリセット
+  _liveRows = [];
+  _liveNewCount = 0;
+  document.getElementById('resultBody').innerHTML =
+    '<tr><td colspan="10" style="text-align:center;padding:20px;color:#9ca3af">データがありません</td></tr>';
+  document.getElementById('mNew').textContent = '0';
+  document.getElementById('mTotal').textContent = '-';
+  document.getElementById('mFiltered').textContent = '-';
+  document.getElementById('mError').textContent = '-';
+  document.getElementById('downloadBtn').disabled = true;
+  setResultTabLabel('📊 結果');
 
   clearLog();
   setRunning(true);
@@ -403,6 +418,38 @@ function setRunning(on) {
   document.getElementById('statusText').textContent = on ? '実行中...' : '待機中';
 }
 
+function setResultTabLabel(text) {
+  document.querySelectorAll('.tab')[1].textContent = text;
+}
+
+function appendRow(row) {
+  _liveRows.push(row);
+  _liveNewCount++;
+
+  const tbody = document.getElementById('resultBody');
+  // 「データがありません」プレースホルダーを削除
+  if (tbody.querySelector('td[colspan]')) tbody.innerHTML = '';
+
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td>${_liveRows.length}</td>
+    <td title="${row.company_name || ''}">${row.company_name || '-'}</td>
+    <td>${row.industry || '-'}</td>
+    <td title="${row.address || ''}">${truncate(row.address, 20)}</td>
+    <td>${row.phone || '-'}</td>
+    <td>${row.review_count ?? '-'}</td>
+    <td>${row.last_photo_posted_date || '-'}</td>
+    <td><a href="${row.website_url || '#'}" title="${row.website_url || ''}" style="color:#2563eb">${truncate(row.website_url, 25)}</a></td>
+    <td><a href="${row.instagram_url || '#'}" title="${row.instagram_url || ''}" style="color:#e1306c">${truncate(row.instagram_url, 20)}</a></td>
+    <td>${row.website_domain_creation_date || '-'}</td>
+  `;
+  tbody.appendChild(tr);
+
+  document.getElementById('mNew').textContent = _liveNewCount;
+  document.getElementById('downloadBtn').disabled = false;
+  setResultTabLabel(`📊 結果 (${_liveNewCount})`);
+}
+
 function appendLog(msg) {
   const box = document.getElementById('logBox');
   if (box.textContent === '実行ログがここに表示されます...') box.textContent = '';
@@ -430,6 +477,11 @@ window.electronAPI.onScraperLog((msg) => {
   if (m) updateProgress(parseInt(m[1]), parseInt(m[2]));
 });
 
+// 1件保存されるたびにリアルタイムで結果タブへ追加
+window.electronAPI.onScraperRow((row) => {
+  appendRow(row);
+});
+
 window.electronAPI.onScraperDone((summary) => {
   setRunning(false);
   document.getElementById('progressBar').style.width = '100%';
@@ -446,19 +498,23 @@ window.electronAPI.onScraperDone((summary) => {
     appendLog('  ✅ 正常終了');
   }
 
-  // メトリクス更新
+  // メトリクスを確定値で更新
   document.getElementById('mTotal').textContent    = summary.total_count;
-  document.getElementById('mNew').textContent      = summary.new_count;
+  document.getElementById('mNew').textContent      = summary.new_count || _liveNewCount;
   document.getElementById('mFiltered').textContent = summary.filtered_count;
   document.getElementById('mError').textContent    = summary.error_count;
 
-  // 結果テーブル更新
-  if (summary.rows && summary.rows.length > 0) {
+  // CSV ダウンロード用データを保持
+  window._csvData = summary.csvContent || '';
+  document.getElementById('downloadBtn').disabled = false;
+
+  // リアルタイムで行が追加されていなかった場合のみ CSV からテーブルを描画して結果タブへ切り替え
+  if (_liveRows.length === 0 && summary.rows && summary.rows.length > 0) {
     renderTable(summary.rows);
-    document.getElementById('downloadBtn').disabled = false;
-    window._csvData = summary.csvContent || '';
     switchTab('result');
   }
+
+  setResultTabLabel('📊 結果');
 });
 
 window.electronAPI.onScraperError((msg) => {

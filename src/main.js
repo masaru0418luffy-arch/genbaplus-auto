@@ -417,7 +417,14 @@ ipcMain.on('scraper-start', (event, params) => {
   scraperProcess.stdout.on('data', (data) => {
     const lines = (outputBuffer + data.toString()).split('\n');
     outputBuffer = lines.pop();
-    lines.forEach(line => { if (line.trim()) send('scraper-log', line.trim()); });
+    lines.forEach(line => {
+      if (!line.trim()) return;
+      if (line.startsWith('SAVED_JSON:')) {
+        try { send('scraper-row', JSON.parse(line.slice('SAVED_JSON:'.length))); } catch {}
+        return;
+      }
+      send('scraper-log', line.trim());
+    });
   });
 
   scraperProcess.stderr.on('data', (data) => {
