@@ -18,7 +18,7 @@ import random
 import re
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote, urlparse
@@ -223,6 +223,17 @@ class JapaneseDateParser:
             return False, "取得不可"
 
         s = date_str.strip()
+
+        # YYYY年M月 形式（写真ページに表示される絶対日付）
+        m = re.search(r"(\d{4})年(\d{1,2})月", s)
+        if m:
+            try:
+                year, month = int(m.group(1)), int(m.group(2))
+                photo_date = datetime(year, month, 1)
+                within = photo_date >= datetime.now() - timedelta(days=365)
+                return within, f"{year}年{month}月"
+            except ValueError:
+                pass
 
         # 今日 / 昨日 / 今週 / 先週 / 今月 / 先月 → 1年以内
         if any(t in s for t in ["今日", "昨日", "今週", "先週", "今月", "先月"]):
@@ -804,18 +815,21 @@ class GoogleMapsScraper:
         return ""
 
     async def _get_last_photo_date(self, store_url: str) -> str:
-        """写真セクションから最新の投稿日（相対表記）を取得する。"""
+        """
+        写真ページから最新の投稿日を取得する。
+
+        Google マップの写真ページでは「写真 · 2025年8月」形式の絶対日付が
+        メタデータとして表示される。「写真を表示」ボタンをクリックして
+        写真ビューアへ遷移し、その日付文字列を取得する。
+        """
+        # 日付パターン（絶対日付を優先、相対日付も対応）
         date_patterns = [
+            r"\d{4}年\d{1,2}月",   # 2025年8月（写真ビューアの絶対日付）
             r"\d+\s*日前",
             r"\d+\s*週間前",
             r"\d+\s*か月前",
             r"\d+\s*年前",
-            r"今日",
-            r"昨日",
-            r"今週",
-            r"先週",
-            r"今月",
-            r"先月",
+            r"今日", r"昨日", r"今週", r"先週", r"今月", r"先月",
         ]
 
         def find_date_in_text(text: str) -> str:
@@ -825,10 +839,12 @@ class GoogleMapsScraper:
                     return m.group(0)
             return ""
 
-        # 写真ボタンをクリック
+        # ── Step 1: 「写真を表示」ボタンをクリック ──
+        # 画像の上に重なるオーバーレイボタン（aria-label が最も安定）
         photo_sels = self.selectors.get("photos_button_list", [
-            'button[aria-label*="写真を見る"]',
-            'button[aria-label*="すべての写真"]',
+            'button[aria-label="写真を表示"]',
+            'button[aria-label*="写真を表示"]',
+            'button[aria-label*="すべての写真を見る"]',
             'button[aria-label*="写真"]',
             'a[href*="/photos"]',
         ])
@@ -841,33 +857,42 @@ class GoogleMapsScraper:
                 el = await self.page.query_selector(sel)
                 if el:
                     await el.click()
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(3)
                     clicked = True
                     break
             except Exception:
                 continue
 
+        # クリックできなければ /photos URL に直接アクセス
         if not clicked:
-            # /photos URL に直接アクセスを試みる
             base = re.sub(r"\?.*", "", store_url)
             photos_url = base.rstrip("/") + "/photos"
             try:
                 await self.page.goto(photos_url, wait_until="domcontentloaded", timeout=15000)
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
             except Exception:
                 pass
 
-        # 日付テキストを探す（aria-label も含めて確認）
+        # ── Step 2: 「写真 · 2025年8月」テキストを探す ──
+        # 写真ビューア左上のメタデータポップアップに表示される
+        try:
+            content = await self.page.content()
+            # 「写真 · YYYY年M月」または「写真・YYYY年M月」形式を優先検索
+            m = re.search(r"写真\s*[·・]\s*(\d{4}年\d{1,2}月)", content)
+            if m:
+                date = m.group(1)
+                await self._back_to_store(store_url)
+                return date
+        except Exception:
+            pass
+
+        # ── Step 3: ページ内の各要素から日付を探す ──
         date_sels = self.selectors.get("photo_date_list", [
             "time",
+            "[aria-label*='年']",
             "[aria-label*='日前']",
             "[aria-label*='週間前']",
             "[aria-label*='か月前']",
-            "[aria-label*='年前']",
-            "[aria-label*='今日']",
-            "[aria-label*='昨日']",
-            "[aria-label*='今週']",
-            "[aria-label*='先週']",
         ])
         if isinstance(date_sels, str):
             date_sels = [date_sels]
@@ -876,7 +901,6 @@ class GoogleMapsScraper:
             try:
                 els = await self.page.query_selector_all(sel)
                 for el in els:
-                    # aria-label と text_content の両方を確認
                     text = (
                         await el.get_attribute("aria-label")
                         or await el.get_attribute("datetime")
@@ -885,37 +909,39 @@ class GoogleMapsScraper:
                     )
                     date = find_date_in_text(text)
                     if date:
-                        try:
-                            await self.page.go_back()
-                            await asyncio.sleep(1)
-                        except Exception:
-                            pass
+                        await self._back_to_store(store_url)
                         return date
             except Exception:
                 continue
 
-        # ページ全文から抽出（写真ページに限定しているので口コミ日付との混同リスクは低い）
+        # ── Step 4: ページ全文フォールバック ──
         try:
             content = await self.page.content()
             date = find_date_in_text(content)
             if date:
-                try:
-                    await self.page.go_back()
-                    await asyncio.sleep(1)
-                except Exception:
-                    pass
+                await self._back_to_store(store_url)
                 return date
         except Exception:
             pass
 
-        # 元ページへ戻る
-        try:
-            await self.page.goto(store_url, wait_until="domcontentloaded", timeout=15000)
-            await asyncio.sleep(1)
-        except Exception:
-            pass
-
+        await self._back_to_store(store_url)
         return "取得不可"
+
+    async def _back_to_store(self, store_url: str) -> None:
+        """写真ページから店舗ページへ戻る。"""
+        try:
+            await self.page.go_back()
+            await asyncio.sleep(1)
+            # go_back で戻れなかった場合は直接アクセス
+            if store_url not in self.page.url:
+                await self.page.goto(store_url, wait_until="domcontentloaded", timeout=15000)
+                await asyncio.sleep(1)
+        except Exception:
+            try:
+                await self.page.goto(store_url, wait_until="domcontentloaded", timeout=15000)
+                await asyncio.sleep(1)
+            except Exception:
+                pass
 
     @property
     def captcha_detected(self) -> bool:
