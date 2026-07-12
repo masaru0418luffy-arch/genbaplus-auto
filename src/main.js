@@ -1,6 +1,7 @@
 const { app, BrowserWindow, Tray, Menu, ipcMain, Notification, nativeImage, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const https = require('https');
 const { spawn } = require('child_process');
 const cron = require('node-cron');
 const Store = require('electron-store');
@@ -50,6 +51,7 @@ app.whenReady().then(() => {
 
   createTray();
   startScheduler();
+  checkForUpdates();
 });
 
 app.on('window-all-closed', (e) => {
@@ -282,6 +284,57 @@ function showNotification(title, body) {
   if (Notification.isSupported()) {
     new Notification({ title, body }).show();
   }
+}
+
+// -------------------------------------------------------
+// 自動更新チェック
+// -------------------------------------------------------
+function checkForUpdates() {
+  const GITHUB_API = 'api.github.com';
+  const REPO = 'masaru0418luffy-arch/genbaplus-auto';
+  const currentVersion = app.getVersion();
+
+  const options = {
+    hostname: GITHUB_API,
+    path: `/repos/${REPO}/releases/latest`,
+    headers: { 'User-Agent': 'genbaplus-auto-poster' },
+  };
+
+  https.get(options, (res) => {
+    let body = '';
+    res.on('data', (chunk) => { body += chunk; });
+    res.on('end', () => {
+      try {
+        const release = JSON.parse(body);
+        const latestTag = (release.tag_name || '').replace(/^v/, '');
+        if (!latestTag || latestTag === currentVersion) return;
+
+        const [latestMajor, latestMinor, latestPatch] = latestTag.split('.').map(Number);
+        const [curMajor, curMinor, curPatch] = currentVersion.split('.').map(Number);
+        const isNewer =
+          latestMajor > curMajor ||
+          (latestMajor === curMajor && latestMinor > curMinor) ||
+          (latestMajor === curMajor && latestMinor === curMinor && latestPatch > curPatch);
+
+        if (!isNewer) return;
+
+        const releaseUrl = release.html_url;
+        const clicked = dialog.showMessageBoxSync({
+          type: 'info',
+          title: 'アップデートがあります',
+          message: `新しいバージョン v${latestTag} が公開されています。\n現在のバージョン: v${currentVersion}`,
+          buttons: ['ダウンロードページを開く', '後で'],
+          defaultId: 0,
+          cancelId: 1,
+        });
+        if (clicked === 0) shell.openExternal(releaseUrl);
+      } catch {
+        // バージョン取得失敗は無視
+      }
+    });
+  }).on('error', () => {
+    // ネットワークエラーは無視
+  });
 }
 
 // -------------------------------------------------------
