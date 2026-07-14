@@ -1,0 +1,7 @@
+public/vendor/babel.min.js
+public/vendor/react.min.js
+public/vendor/react-dom.min.js
+public/vendor/d3.min.js
+public/vendor/topojson.min.js
+public/vendor/firebase-app.min.js
+public/vendor/firebase-firestore.min.js
