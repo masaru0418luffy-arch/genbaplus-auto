@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>スクレイピング進捗マップ</title>
+  <!-- ローカルバンドル (CDN不要) -->
+  <script src="/vendor/react.min.js"></script>
+  <script src="/vendor/react-dom.min.js"></script>
+  <script src="/vendor/babel.min.js"></script>
+  <script src="/vendor/d3.min.js"></script>
+  <script src="/vendor/topojson.min.js"></script>
+  <script src="/vendor/firebase-app.min.js"></script>
+  <script src="/vendor/firebase-firestore.min.js"></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:'Hiragino Sans','Yu Gothic','Noto Sans JP',system-ui,sans-serif;background:#f1f5f9;height:100vh;overflow:hidden;}
+    #root{height:100vh;display:flex;}
+    ::-webkit-scrollbar{width:5px;}
+    ::-webkit-scrollbar-track{background:#f8fafc;}
+    ::-webkit-scrollbar-thumb{background:#e2e8f0;border-radius:3px;}
+    .btn{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:6px;border:none;cursor:pointer;font-size:12px;font-weight:500;transition:opacity .15s;font-family:inherit;}
+    .btn:hover{opacity:.8;}
+    .btn-primary{background:#2563eb;color:#fff;}
+    .btn-secondary{background:#e2e8f0;color:#374151;}
+    .btn-danger{background:#fee2e2;color:#dc2626;}
+    .btn-ghost{background:transparent;color:#64748b;}
+    .btn-sm{padding:2px 7px;font-size:11px;}
+    input[type=text],input[type=color],select{border:1px solid #e2e8f0;border-radius:6px;padding:5px 9px;font-size:13px;outline:none;background:#fff;font-family:inherit;}
+    input[type=text]:focus,select:focus{border-color:#2563eb;box-shadow:0 0 0 2px rgba(37,99,235,.1);}
+    input[type=color]{width:30px;height:27px;padding:2px;cursor:pointer;}
+    .sidebar{width:320px;background:#fff;border-right:1px solid #e2e8f0;display:flex;flex-direction:column;height:100%;flex-shrink:0;}
+    .sidebar-header{padding:14px 16px;background:#1e293b;color:#fff;flex-shrink:0;}
+    .sidebar-body{flex:1;overflow-y:auto;}
+    .sidebar-section{padding:11px 14px;border-bottom:1px solid #f1f5f9;}
+    .section-title{font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;}
+    .map-area{flex:1;display:flex;align-items:center;justify-content:center;background:#f8fafc;position:relative;overflow:hidden;}
+    .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:1000;}
+    .modal{background:#fff;border-radius:12px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.2);min-width:340px;width:90%;max-width:480px;}
+    .tooltip{position:fixed;background:rgba(15,23,42,.92);color:#fff;padding:8px 12px;border-radius:8px;font-size:12px;pointer-events:none;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.2);max-width:220px;}
+    .check-item{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;}
+    .check-item:hover{background:#f8fafc;}
+    .ind-row{display:flex;align-items:center;gap:5px;padding:4px 0;border-bottom:1px solid #f8fafc;}
+    .chip{display:inline-flex;align-items:center;gap:3px;padding:3px 9px;border-radius:999px;font-size:12px;cursor:pointer;border:1.5px solid transparent;font-weight:500;transition:all .12s;}
+    .pref-badge{padding:2px 7px;border-radius:999px;background:#f1f5f9;font-size:11px;color:#475569;cursor:pointer;border:1px solid #e2e8f0;display:inline-block;}
+    .pref-badge:hover{background:#e2e8f0;}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useMemo } = React;
+
+// ============================================================
+// FIREBASE 設定 (後で自分のプロジェクトの値に差し替えてください)
+// ============================================================
+const FIREBASE_CONFIG = {
+  apiKey:            "YOUR_API_KEY",
+  authDomain:        "YOUR_PROJECT_ID.firebaseapp.com",
+  projectId:         "YOUR_PROJECT_ID",
+  storageBucket:     "YOUR_PROJECT_ID.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId:             "YOUR_APP_ID"
+};
+// ============================================================
+
+const PREF_NAMES = {
+  1:'北海道',2:'青森県',3:'岩手県',4:'宮城県',5:'秋田県',
+  6:'山形県',7:'福島県',8:'茨城県',9:'栃木県',10:'群馬県',
+  11:'埼玉県',12:'千葉県',13:'東京都',14:'神奈川県',15:'新潟県',
+  16:'富山県',17:'石川県',18:'福井県',19:'山梨県',20:'長野県',
+  21:'岐阜県',22:'静岡県',23:'愛知県',24:'三重県',25:'滋賀県',
+  26:'京都府',27:'大阪府',28:'兵庫県',29:'奈良県',30:'和歌山県',
+  31:'鳥取県',32:'島根県',33:'岡山県',34:'広島県',35:'山口県',
+  36:'徳島県',37:'香川県',38:'愛媛県',39:'高知県',40:'福岡県',
+  41:'佐賀県',42:'長崎県',43:'熊本県',44:'大分県',45:'宮崎県',
+  46:'鹿児島県',47:'沖縄県'
+};
+
+const PALETTE = [
+  '#4A90D9','#E27D60','#82E0AA','#F5A623','#BD10E0',
+  '#7ED321','#9B59B6','#1ABC9C','#E74C3C','#3498DB',
+  '#F39C12','#2ECC71','#E91E63','#00BCD4','#FF5722'
+];
+
+const INITIAL_INDUSTRIES = [
+  {id:'it',          name:'IT',    color:'#4A90D9'},
+  {id:'restaurant',  name:'飲食',  color:'#E27D60'},
+  {id:'medical',     name:'医療',  color:'#82E0AA'},
+  {id:'construction',name:'建設',  color:'#F5A623'},
+  {id:'retail',      name:'小売',  color:'#BD10E0'},
+];
+
+const genId = () => Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+const fmtDt = iso => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+};
+
+let db = null;
+const fbConfigured = FIREBASE_CONFIG.apiKey !== 'YOUR_API_KEY';
+if (fbConfigured) {
+  try { firebase.initializeApp(FIREBASE_CONFIG); db = firebase.firestore(); }
+  catch(e) { console.warn('Firebase init:', e); }
+}
+
+// ── サブコンポーネント ───────────────────────────────────────
+
+function UserModal({ onDone }) {
+  const [v, setV] = useState('');
+  return (
+    <div className="modal-overlay">
+      <div className="modal">
+        <h2 style={{fontSize:18,color:'#1e293b',marginBottom:8}}>担当者名を入力</h2>
+        <p style={{fontSize:13,color:'#64748b',marginBottom:18}}>更新履歴に記録されます。後から変更できます。</p>
+        <input type="text" placeholder="例: 山田" value={v} onChange={e=>setV(e.target.value)}
+          onKeyDown={e=>e.key==='Enter'&&v.trim()&&onDone(v.trim())}
+          style={{width:'100%',marginBottom:12}} autoFocus />
+        <button className="btn btn-primary" style={{width:'100%',justifyContent:'center',padding:'8px'}}
+          onClick={()=>v.trim()&&onDone(v.trim())}>スタート</button>
+      </div>
+    </div>
+  );
+}
+
+function Tooltip({ code, x, y, scraped, industries }) {
+  return (
+    <div className="tooltip" style={{left:x+14,top:y-10}}>
+      <div style={{fontWeight:700,marginBottom:4}}>{PREF_NAMES[code]||`ID:${code}`}</div>
+      {scraped.length===0
+        ? <span style={{color:'#94a3b8'}}>未着手</span>
+        : scraped.map(s=>{
+            const ind = industries.find(i=>i.id===s.industryId);
+            return (
+              <div key={s.industryId} style={{display:'flex',alignItems:'center',gap:5,marginTop:3}}>
+                <span style={{width:8,height:8,borderRadius:'50%',background:ind?ind.color:'#ccc',flexShrink:0}}/>
+                <span>{ind?ind.name:'?'}</span>
+                <span style={{color:'#94a3b8',fontSize:10,marginLeft:4}}>{fmtDt(s.updatedAt)} {s.updatedBy}</span>
+              </div>
+            );
+          })
+      }
+    </div>
+  );
+}
+
+function IndustryManager({ industries, filterIndustryId, setFilterIndustryId, onAdd, onUpdate, onDelete }) {
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [editId, setEditId] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [editColor, setEditColor] = useState('');
+
+  const handleAdd = () => {
+    if (!newName.trim()) return;
+    onAdd(newName.trim()); setNewName(''); setAdding(false);
+  };
+  const startEdit = ind => { setEditId(ind.id); setEditName(ind.name); setEditColor(ind.color); };
+  const saveEdit = () => { onUpdate(editId,{name:editName||editName,color:editColor}); setEditId(null); };
+
+  return (
+    <div>
+      <div style={{display:'flex',flexWrap:'wrap',gap:4,marginBottom:10}}>
+        <span className={`chip ${!filterIndustryId?'active':''}`}
+          style={{background:!filterIndustryId?'#e0f2fe':'#f8fafc',color:'#0284c7',borderColor:!filterIndustryId?'#0284c7':'transparent'}}
+          onClick={()=>setFilterIndustryId(null)}>すべて</span>
+        {industries.map(ind=>(
+          <span key={ind.id} className={`chip ${filterIndustryId===ind.id?'active':''}`}
+            style={{background:filterIndustryId===ind.id?ind.color+'28':'#f8fafc',color:ind.color,borderColor:filterIndustryId===ind.id?ind.color:'transparent'}}
+            onClick={()=>setFilterIndustryId(filterIndustryId===ind.id?null:ind.id)}>
+            <span style={{width:7,height:7,borderRadius:'50%',background:ind.color,flexShrink:0}}/>
+            {ind.name}
+          </span>
+        ))}
+      </div>
+      {industries.map(ind=>(
+        <div key={ind.id} className="ind-row">
+          {editId===ind.id ? (
+            <>
+              <input type="color" value={editColor} onChange={e=>setEditColor(e.target.value)} style={{flexShrink:0}}/>
+              <input type="text" value={editName} onChange={e=>setEditName(e.target.value)}
+                style={{flex:1,minWidth:0}} onKeyDown={e=>e.key==='Enter'&&saveEdit()} autoFocus/>
+              <button className="btn btn-primary btn-sm" onClick={saveEdit}>保存</button>
+              <button className="btn btn-secondary btn-sm" onClick={()=>setEditId(null)}>×</button>
+            </>
+          ) : (
+            <>
+              <span style={{width:11,height:11,borderRadius:'50%',background:ind.color,flexShrink:0}}/>
+              <span style={{flex:1,fontSize:13}}>{ind.name}</span>
+              <button className="btn btn-ghost btn-sm" onClick={()=>startEdit(ind)}>編集</button>
+              <button className="btn btn-danger btn-sm" onClick={()=>{
+                if(confirm(`「${ind.name}」を削除しますか？取得済み記録もすべて削除されます`)) onDelete(ind.id);
+              }}>削除</button>
+            </>
+          )}
+        </div>
+      ))}
+      {adding ? (
+        <div style={{display:'flex',gap:4,marginTop:8}}>
+          <input type="text" placeholder="業種名" value={newName} onChange={e=>setNewName(e.target.value)}
+            onKeyDown={e=>e.key==='Enter'&&handleAdd()} style={{flex:1}} autoFocus/>
+          <button className="btn btn-primary btn-sm" onClick={handleAdd}>追加</button>
+          <button className="btn btn-secondary btn-sm" onClick={()=>{setAdding(false);setNewName('');}}>×</button>
+        </div>
+      ) : (
+        <button className="btn btn-secondary" style={{marginTop:8,width:'100%',justifyContent:'center'}}
+          onClick={()=>setAdding(true)}>+ 業種を追加</button>
+      )}
+    </div>
+  );
+}
+
+function PrefecturePanel({ code, scraped, industries, onToggle, onClose }) {
+  return (
+    <div className="sidebar-section" style={{background:'#f8fafc'}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
+        <span style={{fontWeight:700,color:'#1e293b',fontSize:15}}>{PREF_NAMES[code]||`ID:${code}`}</span>
+        <button className="btn btn-ghost btn-sm" onClick={onClose} style={{fontSize:16,lineHeight:1,padding:'0 4px'}}>×</button>
+      </div>
+      <p style={{fontSize:11,color:'#94a3b8',marginBottom:6}}>クリックで取得済み ↔ 未着手を切替</p>
+      {industries.map(ind=>{
+        const s = scraped.find(s=>s.industryId===ind.id);
+        return (
+          <div key={ind.id} className="check-item" onClick={()=>onToggle(code,ind.id)}>
+            <div style={{width:16,height:16,borderRadius:4,flexShrink:0,background:s?ind.color:'transparent',
+              border:s?'none':'2px solid #d1d5db',display:'flex',alignItems:'center',justifyContent:'center'}}>
+              {s && <span style={{color:'#fff',fontSize:10,fontWeight:700}}>✓</span>}
+            </div>
+            <span style={{flex:1,fontSize:13,color:s?'#1e293b':'#64748b'}}>{ind.name}</span>
+            {s && <span style={{fontSize:10,color:'#94a3b8',whiteSpace:'nowrap'}}>{fmtDt(s.updatedAt)} {s.updatedBy}</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function UnfinishedList({ features, prefData, filterIndustryId, industries, onSelect }) {
+  const list = useMemo(()=>
+    features.filter(f=>{
+      const scraped = (prefData[f.prefId]||{}).scraped||[];
+      return filterIndustryId ? !scraped.some(s=>s.industryId===filterIndustryId) : scraped.length===0;
+    }).map(f=>f.prefId).sort((a,b)=>a-b),
+    [features,prefData,filterIndustryId]
+  );
+  if (list.length===0) return <p style={{fontSize:12,color:'#16a34a',textAlign:'center',padding:'6px 0'}}>全県完了！</p>;
+  const label = filterIndustryId ? industries.find(i=>i.id===filterIndustryId) : null;
+  return (
+    <div>
+      <p style={{fontSize:11,color:'#94a3b8',marginBottom:6}}>
+        {list.length}件が未着手{label?` (${label.name})`:''}
+      </p>
+      <div style={{display:'flex',flexWrap:'wrap',gap:3}}>
+        {list.map(code=>(
+          <span key={code} className="pref-badge" onClick={()=>onSelect(code)}>
+            {(PREF_NAMES[code]||'').replace(/[都道府県]$/,'')}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── メインApp ────────────────────────────────────────────────
+
+function App() {
+  const [features,   setFeatures]   = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [mapErr,     setMapErr]     = useState(null);
+  const [industries, setIndustries] = useState(INITIAL_INDUSTRIES);
+  const [prefData,   setPrefData]   = useState({});
+  const [selPref,    setSelPref]    = useState(null);
+  const [filterInd,  setFilterInd]  = useState(null);
+  const [tooltip,    setTooltip]    = useState(null);
+  const [userName,   setUserName]   = useState(()=>localStorage.getItem('scrapeMapUser')||'');
+  const [showModal,  setShowModal]  = useState(()=>!localStorage.getItem('scrapeMapUser'));
+  const [fbStatus,   setFbStatus]   = useState(fbConfigured?'接続中...':'ローカルモード');
+
+  // 地図データ読み込み (ローカルファイル)
+  useEffect(()=>{
+    fetch('/vendor/japan.topojson')
+      .then(r=>{ if(!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(topo=>{
+        const key = Object.keys(topo.objects)[0];
+        const feats = topojson.feature(topo, topo.objects[key]).features;
+        const proj = d3.geoMercator().fitSize([570,670],{type:'FeatureCollection',features:feats});
+        const pathFn = d3.geoPath().projection(proj);
+        setFeatures(feats.map(f=>({
+          ...f,
+          prefId:   f.properties.id,           // 都道府県コード 1-47
+          namJa:    f.properties.nam_ja || PREF_NAMES[f.properties.id] || '',
+          pathStr:  pathFn(f),
+          bounds:   pathFn.bounds(f),
+          centroid: pathFn.centroid(f),
+        })));
+        setLoading(false);
+      })
+      .catch(e=>{ setMapErr('地図データ読み込み失敗: '+e.message); setLoading(false); });
+  },[]);
+
+  // Firebase リアルタイムリスナー
+  useEffect(()=>{
+    if (!db) return;
+    const unsub = db.collection('scrape_progress').doc('main')
+      .onSnapshot(snap=>{
+        if (snap.exists) {
+          const d = snap.data();
+          if (d.industries) setIndustries(d.industries);
+          if (d.prefData)   setPrefData(d.prefData);
+        }
+        setFbStatus('リアルタイム同期中');
+      }, e=>{ console.error(e); setFbStatus('同期エラー: '+e.code); });
+    return ()=>unsub();
+  },[]);
+
+  const persist = useCallback((inds,pd)=>{
+    if (!db) return;
+    db.collection('scrape_progress').doc('main')
+      .set({industries:inds,prefData:pd,updatedAt:firebase.firestore.FieldValue.serverTimestamp()})
+      .catch(console.error);
+  },[]);
+
+  const addIndustry = useCallback(name=>{
+    const used = industries.map(i=>i.color);
+    const color = PALETTE.find(c=>!used.includes(c))||'#'+Math.floor(Math.random()*0xffffff).toString(16).padStart(6,'0');
+    const n=[...industries,{id:genId(),name,color}]; setIndustries(n); persist(n,prefData);
+  },[industries,prefData,persist]);
+
+  const updateIndustry = useCallback((id,upd)=>{
+    const n=industries.map(i=>i.id===id?{...i,...upd}:i); setIndustries(n); persist(n,prefData);
+  },[industries,prefData,persist]);
+
+  const deleteIndustry = useCallback(id=>{
+    const n=industries.filter(i=>i.id!==id);
+    const np={};
+    Object.entries(prefData).forEach(([k,v])=>{ np[k]={...v,scraped:(v.scraped||[]).filter(s=>s.industryId!==id)}; });
+    setIndustries(n); setPrefData(np); persist(n,np);
+  },[industries,prefData,persist]);
+
+  const toggleIndustry = useCallback((code,industryId)=>{
+    const k=String(code);
+    const cur=(prefData[k]||{}).scraped||[];
+    const exists=cur.some(s=>s.industryId===industryId);
+    const newScraped=exists
+      ? cur.filter(s=>s.industryId!==industryId)
+      : [...cur,{industryId,updatedAt:new Date().toISOString(),updatedBy:userName||'不明'}];
+    const np={...prefData,[k]:{...prefData[k],scraped:newScraped}};
+    setPrefData(np); persist(industries,np);
+  },[prefData,industries,userName,persist]);
+
+  const getScraped = code => ((prefData[String(code)]||{}).scraped)||[];
+
+  // ── 都道府県の描画 ──
+  const renderPref = f => {
+    const code = f.prefId;
+    const scraped = getScraped(code);
+    const active = filterInd ? scraped.filter(s=>s.industryId===filterInd) : scraped;
+    const selected = selPref===code;
+    const handlers = {
+      onClick: ()=>setSelPref(selPref===code?null:code),
+      onMouseEnter: e=>setTooltip({x:e.clientX,y:e.clientY,code}),
+      onMouseLeave: ()=>setTooltip(null),
+      style:{cursor:'pointer'},
+    };
+    const strokeC = selected?'#0f172a':'#ffffff';
+    const strokeW = selected?2:0.7;
+
+    if (active.length===0) {
+      return <path key={code} d={f.pathStr} fill={filterInd?'#e8eaed':'#d1d5db'}
+        stroke={strokeC} strokeWidth={strokeW} {...handlers}/>;
+    }
+    if (active.length===1) {
+      const ind = industries.find(i=>i.id===active[0].industryId);
+      return <path key={code} d={f.pathStr} fill={ind?ind.color:'#aaa'}
+        stroke={strokeC} strokeWidth={strokeW} opacity={0.88} {...handlers}/>;
+    }
+    // 複数業種 → 縦分割
+    const [[x0,y0],[x1,y1]] = f.bounds;
+    const w=x1-x0, h=y1-y0, n=active.length;
+    const clipId=`cp${code}`;
+    return (
+      <g key={code} {...handlers}>
+        <defs><clipPath id={clipId}><path d={f.pathStr}/></clipPath></defs>
+        {active.map((s,i)=>{
+          const ind=industries.find(i=>i.id===s.industryId);
+          return <rect key={s.industryId}
+            x={x0+(w/n)*i-.5} y={y0-.5} width={w/n+1} height={h+1}
+            fill={ind?ind.color:'#aaa'} opacity={0.88} clipPath={`url(#${clipId})`}/>;
+        })}
+        <path d={f.pathStr} fill="none" stroke={strokeC} strokeWidth={strokeW}/>
+      </g>
+    );
+  };
+
+  const renderLabel = f => {
+    const [cx,cy] = f.centroid;
+    if (isNaN(cx)||isNaN(cy)) return null;
+    const code = f.prefId;
+    const short = (PREF_NAMES[code]||'').replace(/[都道府県]$/,'');
+    const sz = [1,13,47].includes(code)?7:5.5;
+    return (
+      <text key={`l${code}`} x={cx} y={cy} textAnchor="middle" dominantBaseline="middle"
+        fontSize={sz} fill="rgba(15,23,42,.78)" pointerEvents="none" style={{userSelect:'none',fontWeight:500}}>
+        {short}
+      </text>
+    );
+  };
+
+  const totalDone = useMemo(()=>Object.values(prefData).filter(d=>(d.scraped||[]).length>0).length,[prefData]);
+
+  if (showModal) {
+    return <UserModal onDone={name=>{
+      setUserName(name); localStorage.setItem('scrapeMapUser',name); setShowModal(false);
+    }}/>;
+  }
+
+  return (
+    <div style={{display:'flex',height:'100vh',overflow:'hidden'}}>
+
+      {/* ===== サイドバー ===== */}
+      <div className="sidebar">
+        <div className="sidebar-header">
+          <div style={{fontWeight:700,fontSize:15,marginBottom:5}}>スクレイピング進捗マップ</div>
+          <div style={{display:'flex',alignItems:'center',gap:6,fontSize:11}}>
+            <span style={{width:7,height:7,borderRadius:'50%',flexShrink:0,
+              background:fbStatus.includes('同期中')?'#4ade80':fbStatus.includes('エラー')?'#f87171':'#fbbf24'}}/>
+            <span style={{opacity:.75}}>{fbStatus}</span>
+            <span style={{marginLeft:'auto',background:'rgba(255,255,255,.15)',padding:'2px 8px',borderRadius:999}}>
+              {totalDone}/{features.length}県完了
+            </span>
+          </div>
+        </div>
+
+        <div className="sidebar-body">
+
+          {/* 担当者 */}
+          <div className="sidebar-section">
+            <div className="section-title">担当者</div>
+            <div style={{display:'flex',alignItems:'center',gap:6}}>
+              <span style={{fontSize:14,fontWeight:600,color:'#1e293b'}}>{userName}</span>
+              <button className="btn btn-ghost btn-sm" style={{marginLeft:'auto'}} onClick={()=>setShowModal(true)}>変更</button>
+            </div>
+          </div>
+
+          {/* 選択中の都道府県 */}
+          {selPref && (
+            <PrefecturePanel code={selPref} scraped={getScraped(selPref)}
+              industries={industries} onToggle={toggleIndustry} onClose={()=>setSelPref(null)}/>
+          )}
+
+          {/* 業種マスタ / フィルタ */}
+          <div className="sidebar-section">
+            <div className="section-title">業種マスタ / フィルタ</div>
+            <IndustryManager industries={industries} filterIndustryId={filterInd}
+              setFilterIndustryId={setFilterInd} onAdd={addIndustry}
+              onUpdate={updateIndustry} onDelete={deleteIndustry}/>
+          </div>
+
+          {/* 未着手一覧 */}
+          <div className="sidebar-section">
+            <div className="section-title">未着手の都道府県</div>
+            <UnfinishedList features={features} prefData={prefData}
+              filterIndustryId={filterInd} industries={industries}
+              onSelect={code=>setSelPref(code)}/>
+          </div>
+
+          {/* Firebase未設定の案内 */}
+          {!fbConfigured && (
+            <div className="sidebar-section">
+              <div style={{fontSize:11,color:'#92400e',background:'#fef3c7',padding:'9px 10px',borderRadius:6,lineHeight:1.6}}>
+                <strong>⚠ ローカルモード（共有不可）</strong><br/>
+                他のメンバーとリアルタイム共有するには Firebase の設定が必要です。<br/>
+                <code style={{fontSize:10}}>FIREBASE_CONFIG</code> を更新してください。
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ===== 地図エリア ===== */}
+      <div className="map-area">
+        {loading && <div style={{color:'#64748b',fontSize:14}}>地図データを読み込み中...</div>}
+        {mapErr && (
+          <div style={{color:'#dc2626',fontSize:13,maxWidth:380,textAlign:'center',lineHeight:1.6}}>
+            {mapErr}<br/><span style={{color:'#94a3b8',fontSize:12}}>サーバーが起動しているか確認してください</span>
+          </div>
+        )}
+        {!loading && !mapErr && (
+          <svg viewBox="0 0 570 670" style={{width:'100%',height:'100%'}}>
+            {features.map(f=>renderPref(f))}
+            {features.map(f=>renderLabel(f))}
+          </svg>
+        )}
+        {tooltip && (
+          <Tooltip code={tooltip.code} x={tooltip.x} y={tooltip.y}
+            scraped={getScraped(tooltip.code)} industries={industries}/>
+        )}
+        {!loading && !mapErr && (
+          <div style={{position:'absolute',bottom:10,right:12,fontSize:11,color:'#94a3b8'}}>
+            県をクリックして取得状況を更新
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+</script>
+</body>
+</html>
